@@ -6,7 +6,7 @@ from [dexmal/realtime-vla-flash](https://github.com/dexmal/realtime-vla-flash) (
 | Step | Script | Status |
 | --- | --- | --- |
 | 1. Teacher targets | `make_teacher_targets.py` | tested (RTX 5090: 35 frames/s with NVFP4) |
-| 2. Draft training | `train_draft.py` | tested on a 300-frame smoke run; full run in progress |
+| 2. Draft training | `train_draft.py` | tested (2000-frame smoke run incl. resume); 100-epoch LIBERO-Spatial run in progress |
 | 3. Serving | `serve_flash_policy.py` + `openpi.policies.flash_policy.FlashPolicy` | **not yet validated end to end** |
 
 ## Setup (any Blackwell GPU for NVFP4, e.g. B200)
@@ -47,13 +47,22 @@ The first ~1-10 min is `torch.compile` + CUDA graph capture; then it runs one fr
 uv run scripts/flash/train_draft.py \
     --dataset-dir /data/libero --checkpoint-dir /data/pi05_libero_pytorch \
     --teacher /data/teacher_libero_spatial_nvfp4.npz --output /data/draft_libero_spatial \
-    --batch-size 128 --epochs 20 --decode-threads 32
+    --batch-size 64 --epochs 100 --cache-prefixes --decode-threads 64
 ```
 
 - The draft is one Gemma-2B decoder block (initialized from VLM layer 0) + state token + learned action queries +
   linear head, ~110M parameters. It regresses the teacher chunks with a step-weighted Huber loss.
-- Prefix embeddings (frozen SigLIP + prompt embeddings) are recomputed every step instead of cached, so the CPU
-  (PNG decode + transforms, `--decode-threads`) and the frozen SigLIP forward are part of the step time.
+- `--cache-prefixes` computes the frozen prefix embeddings (SigLIP + prompt) once and keeps them in host RAM
+  (bfloat16, ~2.3 MB per frame: ~120 GB for LIBERO-Spatial, built in ~5.5 min on an H100). Without it they are
+  recomputed every step, so PNG decoding (`--decode-threads`) and the SigLIP forward dominate the step time.
+- The draft computes queries, attention output, and MLP only for the action slots (the only decoded tokens), with
+  RMSNorm and rotary embeddings as Triton kernels (`openpi.models_pytorch.triton_ops`). Predictions are bitwise
+  identical to the full block (`DraftChunkHead.forward_reference`) at batch 64 on an H100; the kernels themselves match
+  PyTorch's rounding bitwise at every shape (`flash_test.py`). At other shapes cuBLAS may pick a different matmul
+  algorithm for the smaller matrices, which changes rounding by at most one bfloat16 step.
+- H100, batch 64: 0.46 s/step recomputing prefixes with the full block, 0.06 s/step (including evaluation) with
+  `--cache-prefixes` and the action-slot forward (draft step alone: 111 ms → 18 ms). A resumable `last.pt` is written
+  every `--checkpoint-every` steps; a restarted run continues exactly where it stopped.
 - Paper setting: 100 epochs, batch 64, AdamW 2e-3, 4× RTX 4090D ~6 h with cached prefixes. Watch
   `metrics.jsonl`: `val_frac_chunks_all_within_0.15` approximates how often a draft chunk would be accepted over the
   replan window. The best checkpoint by `val_rms_dist_exec` is written to `draft.safetensors`.

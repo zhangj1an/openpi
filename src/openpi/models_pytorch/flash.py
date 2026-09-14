@@ -17,10 +17,12 @@ import math
 
 import torch
 from torch import nn
+import torch.nn.functional as F  # noqa: N812
 from transformers.cache_utils import DynamicCache
 from transformers.models.gemma.modeling_gemma import GemmaDecoderLayer
 from transformers.models.gemma.modeling_gemma import GemmaRotaryEmbedding
 
+from openpi.models_pytorch import triton_ops
 from openpi.models_pytorch.pi0_pytorch import make_att_2d_masks
 
 
@@ -60,6 +62,55 @@ class DraftChunkHead(nn.Module):
         self.block.load_state_dict(layer.state_dict(), strict=True)
 
     def forward(self, prefix_embs, prefix_pad_masks, prefix_att_masks, state) -> torch.Tensor:
+        """Bitwise the same outputs as `forward_reference`, computing queries, attention, and MLP for the action slots only.
+
+        The action slots are the last attention block, so they attend to every unpadded token, and only their outputs
+        are decoded: prefix and state tokens contribute keys and values but need no query, o_proj, or MLP (~1/57 of the
+        tokens). Every remaining op runs on the same values, in the same dtype, as in the full block (slicing rows does
+        not change a row's linear, attention, or elementwise result), and RMSNorm / rotary embeddings run as Triton
+        kernels that reproduce PyTorch's rounding.
+        """
+        del prefix_att_masks  # the action slots see every block
+        b, device = prefix_embs.shape[0], prefix_embs.device
+        block, attn = self.block, self.block.self_attn
+        h = self.chunk_len
+        dtype = attn.q_proj.weight.dtype
+        state_tok = self.state_token(state.to(self.state_token.weight.dtype))[:, None, :].to(dtype)
+        queries = self.action_queries.weight[None].expand(b, -1, -1).to(dtype)
+        hidden = torch.cat([prefix_embs.to(dtype), state_tok, queries], dim=1)
+
+        ones = torch.ones((b, 1 + h), dtype=torch.bool, device=device)
+        pad = torch.cat([prefix_pad_masks, ones], dim=1)
+        position_ids = torch.cumsum(pad, dim=1) - 1
+        cos, sin = self.rotary_emb(hidden, position_ids)
+
+        # Self-attention (GemmaAttention + transformers' sdpa_attention_forward), queries for the action slots only.
+        normed = triton_ops.gemma_rms_norm(hidden, block.input_layernorm.weight, block.input_layernorm.eps)
+        t_len = normed.shape[1]
+        q = attn.q_proj(normed[:, -h:]).view(b, h, -1, attn.head_dim).transpose(1, 2)
+        k = attn.k_proj(normed).view(b, t_len, -1, attn.head_dim).transpose(1, 2)
+        v = attn.v_proj(normed).view(b, t_len, -1, attn.head_dim).transpose(1, 2)
+        q = triton_ops.apply_rope(q, cos[:, -h:], sin[:, -h:])
+        k = triton_ops.apply_rope(k, cos, sin)
+        n_rep = attn.num_key_value_groups
+        k = k[:, :, None].expand(b, k.shape[1], n_rep, t_len, attn.head_dim).reshape(b, -1, t_len, attn.head_dim)
+        v = v[:, :, None].expand(b, v.shape[1], n_rep, t_len, attn.head_dim).reshape(b, -1, t_len, attn.head_dim)
+        # The action rows of the full block's additive mask: every unpadded key.
+        mask = torch.zeros((b, 1, h, t_len), dtype=dtype, device=device).masked_fill(~pad[:, None, None, :], -1e9)
+        out = F.scaled_dot_product_attention(
+            q.contiguous(), k.contiguous(), v.contiguous(), attn_mask=mask, dropout_p=0.0, scale=attn.scaling
+        )
+        out = attn.o_proj(out.transpose(1, 2).contiguous().reshape(b, h, -1))
+        hidden = hidden[:, -h:] + out
+
+        normed = triton_ops.gemma_rms_norm(
+            hidden, block.post_attention_layernorm.weight, block.post_attention_layernorm.eps
+        )
+        hidden = hidden + block.mlp(normed)
+        return self.action_head(hidden.to(self.action_head.weight.dtype)).float()
+
+    def forward_reference(self, prefix_embs, prefix_pad_masks, prefix_att_masks, state) -> torch.Tensor:
+        """The full decoder block over every token (original implementation, kept for tests)."""
         b, device = prefix_embs.shape[0], prefix_embs.device
         dtype = self.block.self_attn.q_proj.weight.dtype
         state_tok = self.state_token(state.to(self.state_token.weight.dtype))[:, None, :].to(dtype)
@@ -81,9 +132,7 @@ class DraftChunkHead(nn.Module):
         # Padded tokens (e.g. an empty camera slot) would otherwise have fully masked rows, whose softmax is NaN in
         # bf16 and poisons gradients. Letting every token see itself does not change any unpadded token's output.
         mask = mask | torch.eye(mask.shape[-1], dtype=torch.bool, device=device)[None]
-        attention_mask = torch.zeros(mask[:, None].shape, dtype=torch.float32, device=device).masked_fill(
-            ~mask[:, None], -1e9
-        )
+        attention_mask = torch.zeros(mask[:, None].shape, dtype=dtype, device=device).masked_fill(~mask[:, None], -1e9)
         position_ids = torch.cumsum(pad, dim=1) - 1
         hidden = self.block(
             hidden,

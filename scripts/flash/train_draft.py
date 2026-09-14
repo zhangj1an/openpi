@@ -1,8 +1,9 @@
 """Train a FLASH draft head for a pi0 / pi05 PyTorch policy (Realtime-VLA FLASH, arXiv:2605.13778).
 
 The draft regresses teacher action chunks (scripts/flash/make_teacher_targets.py) from the frozen policy's prefix
-embeddings (SigLIP image tokens + prompt embeddings) and the normalized robot state. Prefix embeddings are recomputed
-on the fly instead of cached, since a cache of 800 x 2048 tokens per frame does not fit on small disks.
+embeddings (SigLIP image tokens + prompt embeddings) and the normalized robot state. By default prefix embeddings are
+recomputed on the fly. With --cache-prefixes they are computed once and kept in host RAM (bfloat16, ~2.3 MB per frame
+for 560 tokens, e.g. ~120 GB for LIBERO-Spatial), which removes PNG decoding and the SigLIP forward from every step.
 
     uv run scripts/flash/train_draft.py --dataset-dir /data/libero --checkpoint-dir /ckpt/pi05_libero_pytorch \
         --teacher teacher_libero_spatial.npz --output draft_libero_spatial
@@ -58,6 +59,11 @@ class Args:
     eval_every: int = 500
     decode_threads: int = 12
     seed: int = 0
+    # Keep every frame's prefix embeddings in host RAM instead of recomputing them each step (see module docstring).
+    cache_prefixes: bool = False
+    cache_batch_size: int = 128
+    # Write a resumable checkpoint (draft, optimizer, data order) every this many steps; resumed on restart.
+    checkpoint_every: int = 2000
 
 
 def _input_transforms(train_config, checkpoint_dir: str, buckets):
@@ -98,6 +104,67 @@ def _load_frames(root: pathlib.Path, teacher) -> list[dict]:
             for r in table.to_pylist()
         )
     return frames[: len(teacher["targets"])]  # a teacher file may stop mid-episode (--max-frames)
+
+
+class _PrefixCache:
+    """Prefix embeddings, masks, and states of every frame in host RAM, gathered into pinned buffers per batch."""
+
+    def __init__(self, embs: torch.Tensor, pad: torch.Tensor, att: torch.Tensor, state: torch.Tensor):
+        self.embs, self.pad, self.att, self.state = embs, pad, att, state
+        self._device = torch.device("cuda")
+        # Two pinned buffer sets per batch size, used alternately; each is reused only once its copy has finished.
+        self._buffers: dict[int, list] = {}
+        self._turn = 0
+
+    def batch(self, idx: np.ndarray):
+        sources = (self.embs, self.pad, self.att, self.state)
+        if len(idx) not in self._buffers:
+            self._buffers[len(idx)] = [
+                (
+                    [torch.empty((len(idx), *s.shape[1:]), dtype=s.dtype, pin_memory=True) for s in sources],
+                    torch.cuda.Event(),
+                )
+                for _ in range(2)
+            ]
+        self._turn ^= 1
+        bufs, copied = self._buffers[len(idx)][self._turn]
+        copied.synchronize()  # the previous copy out of these buffers
+        index = torch.from_numpy(idx)
+        out = []
+        for src, buf in zip(sources, bufs, strict=True):
+            torch.index_select(src, 0, index, out=buf)
+            out.append(buf.to(self._device, non_blocking=True))
+        copied.record()
+        return tuple(out)
+
+
+def _build_prefix_cache(compute_prefix_batch, n: int, batch_size: int) -> _PrefixCache:
+    embs = pad = att = state = None
+    start = time.monotonic()
+    for lo in range(0, n, batch_size):
+        idx = np.arange(lo, min(lo + batch_size, n))
+        e, p, a, s = compute_prefix_batch(idx)
+        if embs is None:
+            logging.info(
+                "Caching prefixes: %d frames x %s %s (%.1f GB host RAM)",
+                n,
+                tuple(e.shape[1:]),
+                e.dtype,
+                n * e[0].numel() * e.element_size() / 1e9,
+            )
+            embs = torch.empty((n, *e.shape[1:]), dtype=e.dtype)
+            pad = torch.empty((n, *p.shape[1:]), dtype=p.dtype)
+            att = torch.empty((n, *a.shape[1:]), dtype=a.dtype)
+            state = torch.empty((n, *s.shape[1:]), dtype=s.dtype)
+        assert e.shape[1:] == embs.shape[1:], f"prefix length changed: {tuple(e.shape)} vs {tuple(embs.shape)}"
+        embs[lo : lo + len(idx)].copy_(e)
+        pad[lo : lo + len(idx)].copy_(p)
+        att[lo : lo + len(idx)].copy_(a)
+        state[lo : lo + len(idx)].copy_(s)
+        if (lo // batch_size) % 50 == 0:
+            logging.info("cached %d/%d frames (%.0f s)", lo + len(idx), n, time.monotonic() - start)
+    logging.info("Prefix cache built in %.1f min", (time.monotonic() - start) / 60)
+    return _PrefixCache(embs, pad, att, state)
 
 
 def _step_weights(h: int, args: Args) -> torch.Tensor:
@@ -156,7 +223,7 @@ def main(args: Args) -> None:
         }
         return drop_masked_image_slots(transform(obs))  # same inputs as serving: no empty camera slot
 
-    def prefix_batch(idx: np.ndarray):
+    def compute_prefix_batch(idx: np.ndarray):
         items = list(pool.map(make_inputs, idx.tolist()))
         batch = jax.tree.map(lambda *xs: torch.from_numpy(np.stack(xs)).to(device), *items)
         observation = _model.Observation.from_dict(batch)
@@ -164,6 +231,13 @@ def main(args: Args) -> None:
             images, img_masks, tokens, token_masks, state = model._preprocess_observation(observation, train=False)  # noqa: SLF001
             prefix_embs, pad, att = model.embed_prefix(images, img_masks, tokens, token_masks)
         return prefix_embs, pad, att, state.float()
+
+    prefix_batch = compute_prefix_batch
+    if args.cache_prefixes:
+        cache = _build_prefix_cache(compute_prefix_batch, len(frames), args.cache_batch_size)
+        del model  # only the cached embeddings are needed from here on
+        torch.cuda.empty_cache()
+        prefix_batch = cache.batch
 
     def loss_fn(pred, tgt):
         per = F.smooth_l1_loss(pred, tgt, reduction="none", beta=args.huber_beta).mean(dim=-1)  # (B, H)
@@ -197,7 +271,15 @@ def main(args: Args) -> None:
     out.mkdir(parents=True, exist_ok=True)
     best = math.inf
     step, epoch_perm, cursor = 0, rng.permutation(train_idx), 0
-    start = time.monotonic()
+    resume_path = out / "last.pt"
+    if resume_path.exists():
+        state = torch.load(resume_path, map_location=device, weights_only=False)
+        draft.load_state_dict(state["draft"])
+        optim.load_state_dict(state["optim"])
+        step, cursor, best, epoch_perm = state["step"], state["cursor"], state["best"], state["epoch_perm"]
+        rng.bit_generator.state = state["rng"]
+        logging.info("Resumed from %s at step %d", resume_path, step)
+    start, start_step = time.monotonic(), step
     while step < total_steps:
         if cursor + args.batch_size > len(epoch_perm):
             epoch_perm, cursor = rng.permutation(train_idx), 0
@@ -219,7 +301,12 @@ def main(args: Args) -> None:
 
         if step % 50 == 0:
             logging.info(
-                "step %d/%d loss %.4f  %.2f s/step", step, total_steps, loss.item(), (time.monotonic() - start) / step
+                "step %d/%d (epoch %.2f) loss %.4f  %.3f s/step",
+                step,
+                total_steps,
+                step * args.batch_size / len(train_idx),
+                loss.item(),
+                (time.monotonic() - start) / (step - start_step),
             )
         if step % args.eval_every == 0 or step == total_steps:
             metrics = {"step": step, **evaluate()}
@@ -232,6 +319,19 @@ def main(args: Args) -> None:
                 (out / "draft_meta.json").write_text(
                     json.dumps({"config": args.config, "chunk_len": horizon, "action_dim": 7, "step": step, **metrics})
                 )
+        if step % args.checkpoint_every == 0 and step < total_steps:
+            state = {
+                "draft": draft.state_dict(),
+                "optim": optim.state_dict(),
+                "step": step,
+                "cursor": cursor,
+                "best": best,
+                "epoch_perm": epoch_perm,
+                "rng": rng.bit_generator.state,
+            }
+            torch.save(state, out / "last.pt.tmp")
+            (out / "last.pt.tmp").replace(resume_path)
+    resume_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
