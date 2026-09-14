@@ -38,6 +38,7 @@ class Args:
     pytorch_quantization: str | None = None
     token_len_buckets: tuple[int, ...] = (48,)
     max_frames: int | None = None
+    save_every: int = 5000
 
 
 def _png(cell) -> np.ndarray:
@@ -53,6 +54,13 @@ def main(args: Args) -> None:
         keep = {tasks[i] for i in args.task_indices}
         episodes = [e for e in episodes if e["tasks"][0] in keep]
     chunk_size = info.get("chunks_size", 1000)
+    paths = {
+        e["episode_index"]: root
+        / info["data_path"].format(episode_chunk=e["episode_index"] // chunk_size, episode_index=e["episode_index"])
+        for e in episodes
+    }
+    if missing := [str(p) for p in paths.values() if not p.exists()]:
+        raise FileNotFoundError(f"{len(missing)} episode files are missing, e.g. {missing[:3]}")
 
     train_config = _config.get_config(args.config)
     if args.pytorch_quantization:
@@ -72,14 +80,29 @@ def main(args: Args) -> None:
     episode_index = np.zeros(n_total, dtype=np.int64)
     frame_index = np.zeros(n_total, dtype=np.int64)
     n = 0
+    # Progress is saved every `save_every` frames and resumed on restart.
+    partial = pathlib.Path(args.output + ".partial.npz")
+    if partial.exists():
+        saved = np.load(partial)
+        n = int(saved["n"])
+        targets[:n], episode_index[:n], frame_index[:n] = saved["targets"], saved["episode_index"], saved["frame_index"]
+        logging.info("Resuming from %s at frame %d", partial, n)
+    done = n
     start = time.monotonic()
-    with tqdm.tqdm(total=n_total) as bar:
+    seen = 0
+    with tqdm.tqdm(total=n_total, initial=n) as bar:
         for ep in episodes:
-            path = root / info["data_path"].format(
-                episode_chunk=ep["episode_index"] // chunk_size, episode_index=ep["episode_index"]
+            if seen + ep["length"] <= done:  # already generated before a restart
+                seen += ep["length"]
+                continue
+            table = pq.read_table(
+                paths[ep["episode_index"]], columns=["image", "wrist_image", "state", "frame_index", "task_index"]
             )
-            table = pq.read_table(path, columns=["image", "wrist_image", "state", "frame_index", "task_index"])
             for row in table.to_pylist():
+                if seen < done:
+                    seen += 1
+                    continue
+                seen += 1
                 if n >= n_total:
                     break
                 obs = {
@@ -95,9 +118,13 @@ def main(args: Args) -> None:
                 frame_index[n] = row["frame_index"]
                 n += 1
                 bar.update(1)
+                if n % args.save_every == 0:
+                    np.savez(
+                        partial, n=n, targets=targets[:n], episode_index=episode_index[:n], frame_index=frame_index[:n]
+                    )
             if n >= n_total:
                 break
-    logging.info("Generated %d teacher chunks in %.1f min", n, (time.monotonic() - start) / 60)
+    logging.info("Generated %d teacher chunks in %.1f min", n - done, (time.monotonic() - start) / 60)
     np.savez(
         args.output,
         targets=targets[:n],
@@ -114,6 +141,7 @@ def main(args: Args) -> None:
             }
         ),
     )
+    partial.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
