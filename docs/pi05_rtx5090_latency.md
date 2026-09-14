@@ -104,4 +104,11 @@ Status:
 3. Serving: `FlashPolicy` with separate CUDA graphs for full rounds (exposing the prefix KV cache) and flash rounds
    (SigLIP + draft + K=2 batched verification reading that cache without copies); then the same 100-episode eval.
 
-Not committed yet: `src/openpi/models_pytorch/flash.py`, `src/openpi/policies/flash_policy.py`, `scripts/flash/`.
+Code: `src/openpi/models_pytorch/flash.py`, `src/openpi/policies/flash_policy.py`, `scripts/flash/` (see
+`scripts/flash/README.md`). Teacher generation and draft training are tested; FLASH serving is not yet validated end to
+end.
+
+## Raw results
+
+Per-episode LIBERO results, per-chunk latencies, the latency/exactness harness outputs and the scripts that produced
+them are in [`docs/pi05_rtx5090_eval/`](pi05_rtx5090_eval/README.md).

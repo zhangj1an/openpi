@@ -77,7 +77,7 @@ members = ["packages/*"]
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-extend-exclude = ["docker", "third_party", "src/openpi/models_pytorch/transformers_replace/*"]
+extend-exclude = ["docker", "third_party", "src/openpi/models_pytorch/transformers_replace/*", "docs/pi05_rtx5090_eval/scripts"]
 
 [tool.ruff.lint]
 # https://docs.astral.sh/ruff/rules/

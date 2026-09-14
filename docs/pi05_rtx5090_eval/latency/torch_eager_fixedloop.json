@@ -1,0 +1,16 @@
+{
+ "label": "torch_eager_fixedloop",
+ "framework": "openpi-pytorch",
+ "torch": "2.9.1+cu128",
+ "compile": "none",
+ "quant": "none",
+ "quantized_linears": 0,
+ "policy_load_s": 62.0694642290473,
+ "first_call_ms": 774.7222300386056,
+ "infer_p50_ms": 240.21544796414673,
+ "infer_p90_ms": 244.56081385724247,
+ "model_p50_ms": 234.65783247957006,
+ "cuda_graph": false,
+ "maxabs_vs_jax_ref": 0.0050113334325849745,
+ "peak_mem_GB": 7.646495744
+}

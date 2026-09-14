@@ -1,0 +1,13 @@
+{
+ "label": "lat_batched_siglip",
+ "mode": "latency",
+ "patches": [
+  "batched_siglip"
+ ],
+ "max_token_len": 200,
+ "first_call_ms": 25687.28548893705,
+ "maxabs_vs_baseline": 0.004523806396484309,
+ "infer_p50_ms": 59.732441033702344,
+ "infer_p90_ms": 60.54155818419531,
+ "model_p50_ms": 50.89104449143633
+}

@@ -1,0 +1,10 @@
+{
+ "label": "exact_batched_siglip",
+ "mode": "exact",
+ "patches": [
+  "batched_siglip"
+ ],
+ "max_token_len": 200,
+ "first_call_ms": 6210.342210019007,
+ "maxabs_vs_baseline": 0.0
+}

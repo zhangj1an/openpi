@@ -1,0 +1,11 @@
+{
+ "label": "jax_cublas128_cudnn910",
+ "mode": "latency",
+ "patches": [],
+ "max_token_len": 200,
+ "first_call_ms": 24409.757675952278,
+ "maxabs_vs_baseline": 0.004523806396484309,
+ "infer_p50_ms": 49.47816545609385,
+ "infer_p90_ms": 49.68784488737583,
+ "model_p50_ms": 48.489733948372304
+}

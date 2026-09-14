@@ -1,0 +1,14 @@
+{
+ "label": "jax_branch_buckets48",
+ "mode": "latency",
+ "patches": [],
+ "max_token_len": 200,
+ "token_len_buckets": [
+  48
+ ],
+ "first_call_ms": 42153.216784936376,
+ "maxabs_vs_baseline": 0.004935061523437589,
+ "infer_p50_ms": 45.18580454168841,
+ "infer_p90_ms": 45.427262934390455,
+ "model_p50_ms": 44.30363146821037
+}

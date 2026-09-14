@@ -1,0 +1,8 @@
+{
+ "label": "branch_exact_jit_infer",
+ "mode": "exact",
+ "patches": [],
+ "max_token_len": 200,
+ "first_call_ms": 5955.53445990663,
+ "maxabs_vs_baseline": 0.0016476204528808047
+}

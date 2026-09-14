@@ -1,0 +1,8 @@
+{
+ "label": "branch_exact_batched_siglip",
+ "mode": "exact",
+ "patches": [],
+ "max_token_len": 200,
+ "first_call_ms": 6215.670971083455,
+ "maxabs_vs_baseline": 0.0
+}

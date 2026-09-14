@@ -1,0 +1,11 @@
+{
+ "label": "branch_lat_jit_infer",
+ "mode": "latency",
+ "patches": [],
+ "max_token_len": 200,
+ "first_call_ms": 24844.522478990257,
+ "maxabs_vs_baseline": 0.005757571777343706,
+ "infer_p50_ms": 51.378938485868275,
+ "infer_p90_ms": 51.75343414302915,
+ "model_p50_ms": 50.42140797013417
+}

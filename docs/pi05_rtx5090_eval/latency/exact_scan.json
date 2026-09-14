@@ -1,0 +1,10 @@
+{
+ "label": "exact_scan",
+ "mode": "exact",
+ "patches": [
+  "scan_loop"
+ ],
+ "max_token_len": 200,
+ "first_call_ms": 7163.499331101775,
+ "maxabs_vs_baseline": 0.0
+}

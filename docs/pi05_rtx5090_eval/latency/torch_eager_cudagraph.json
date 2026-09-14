@@ -1,0 +1,16 @@
+{
+ "label": "torch_eager_cudagraph",
+ "framework": "openpi-pytorch",
+ "torch": "2.9.1+cu128",
+ "compile": "none",
+ "quant": "none",
+ "quantized_linears": 0,
+ "policy_load_s": 62.32039220503066,
+ "first_call_ms": 1607.0189039455727,
+ "infer_p50_ms": 59.3227845383808,
+ "infer_p90_ms": 59.41429687663913,
+ "model_p50_ms": null,
+ "cuda_graph": true,
+ "maxabs_vs_jax_ref": 0.0050113334325849745,
+ "peak_mem_GB": 7.655959552
+}

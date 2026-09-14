@@ -1,0 +1,13 @@
+{
+ "label": "lat_scan",
+ "mode": "latency",
+ "patches": [
+  "scan_loop"
+ ],
+ "max_token_len": 200,
+ "first_call_ms": 25970.269526937045,
+ "maxabs_vs_baseline": 0.0024409191894529947,
+ "infer_p50_ms": 63.76094149891287,
+ "infer_p90_ms": 64.65495482552797,
+ "model_p50_ms": 55.235893465578556
+}
