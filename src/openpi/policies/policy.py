@@ -5,9 +5,9 @@ import time
 from typing import Any, TypeAlias
 
 import flax
+import flax.nnx as nnx
 import flax.traverse_util
 import jax
-import jax.numpy as jnp
 import numpy as np
 from openpi_client import base_policy as _base_policy
 import torch
@@ -63,41 +63,59 @@ class Policy(BasePolicy):
             # JAX model setup
             self._sample_actions = nnx_utils.module_jit(model.sample_actions)
             self._rng = rng or jax.random.key(0)
+            self._jax_infer = self._make_jax_infer(model)
+
+    def _make_jax_infer(self, model: _model.BaseModel):
+        """One jitted call from host numpy inputs to the unbatched action chunk.
+
+        Batching, uint8 -> float image conversion and the RNG split all run inside the compiled program instead of
+        as separate eager device ops (~7 ms of host overhead per call at batch size 1). Same arithmetic and the
+        same RNG stream as the eager path.
+        """
+        graphdef, state = nnx.split(model)
+        sample_kwargs = dict(self._sample_kwargs)
+
+        def infer_core(state, rng, inputs, noise):
+            module = nnx.merge(graphdef, state)
+            inputs = jax.tree.map(lambda x: x[None, ...], inputs)
+            rng, sample_rng = jax.random.split(rng)
+            kwargs = dict(sample_kwargs)
+            if noise is not None:
+                kwargs["noise"] = noise[None, ...] if noise.ndim == 2 else noise
+            actions = module.sample_actions(sample_rng, _model.Observation.from_dict(inputs), **kwargs)
+            return rng, actions[0]
+
+        jitted = jax.jit(infer_core)
+        return lambda rng, inputs, noise: jitted(state, rng, inputs, noise)
 
     @override
     def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._input_transform(inputs)
+
+        start_time = time.monotonic()
         if not self._is_pytorch_model:
-            # Make a batch and convert to jax.Array.
-            inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
-            self._rng, sample_rng_or_pytorch_device = jax.random.split(self._rng)
+            if noise is not None:
+                noise = np.asarray(noise, dtype=np.float32)
+            self._rng, actions = self._jax_infer(self._rng, inputs, noise)
+            outputs = {"state": np.asarray(inputs["state"], dtype=np.float32), "actions": np.asarray(actions)}
         else:
             # Convert inputs to PyTorch tensors and move to correct device
             inputs = jax.tree.map(lambda x: torch.from_numpy(np.array(x)).to(self._pytorch_device)[None, ...], inputs)
-            sample_rng_or_pytorch_device = self._pytorch_device
-
-        # Prepare kwargs for sample_actions
-        sample_kwargs = dict(self._sample_kwargs)
-        if noise is not None:
-            noise = torch.from_numpy(noise).to(self._pytorch_device) if self._is_pytorch_model else jnp.asarray(noise)
-
-            if noise.ndim == 2:  # If noise is (action_horizon, action_dim), add batch dimension
-                noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
-            sample_kwargs["noise"] = noise
-
-        observation = _model.Observation.from_dict(inputs)
-        start_time = time.monotonic()
-        outputs = {
-            "state": inputs["state"],
-            "actions": self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs),
-        }
-        model_time = time.monotonic() - start_time
-        if self._is_pytorch_model:
+            sample_kwargs = dict(self._sample_kwargs)
+            if noise is not None:
+                noise = torch.from_numpy(noise).to(self._pytorch_device)
+                if noise.ndim == 2:  # If noise is (action_horizon, action_dim), add batch dimension
+                    noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
+                sample_kwargs["noise"] = noise
+            observation = _model.Observation.from_dict(inputs)
+            outputs = {
+                "state": inputs["state"],
+                "actions": self._sample_actions(self._pytorch_device, observation, **sample_kwargs),
+            }
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)
-        else:
-            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
+        model_time = time.monotonic() - start_time
 
         outputs = self._output_transform(outputs)
         outputs["policy_timing"] = {
