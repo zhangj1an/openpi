@@ -90,7 +90,7 @@ uv run scripts/serve_policy.py --pytorch-quantization nvfp4 \
 | vLLM-Omni `pi05-cudagraph` | openpi `pi05_libero` converted | 99 / 100 | 93.3 |
 | vLLM-Omni `pi05-cudagraph` | `lerobot/pi05_libero_finetuned_v044` | 97 / 100 | 94.6 |
 
-## Tried and dropped: FLASH speculative inference
+## Inconclusive: FLASH speculative inference
 
 [Realtime-VLA FLASH](https://arxiv.org/abs/2605.13778) (code: `dexmal/realtime-vla-flash`, π0 only) skips the
 PaliGemma prefill on most replanning rounds: a ~110M-parameter draft (one Gemma block initialized from VLM layer 0,
@@ -99,8 +99,9 @@ endpoint at t ∈ {0.10, 0.05} using the last full round's KV cache, and the lon
 rejection or a predicted gripper switch falls back to a full round. A [DSpark](https://arxiv.org/abs/2607.05147)-style
 confidence head (per-action acceptance probability) was trained jointly with the draft.
 
-**Decision: not pursued.** The trained draft agrees with the full policy too rarely for a flash path to pay off against
-the 24.2 ms NVFP4 baseline, so FLASH serving was never evaluated in closed loop.
+**Status: inconclusive.** A first analysis concluded the draft agrees with the full policy too rarely to pay off against
+the 24.2 ms NVFP4 baseline, but that rested on an offline proxy that is stricter than the real acceptance test (see
+"Why the proxy is not the verifier" below). Acceptance under the real verifier is being measured offline.
 
 What was run (1× H100, `scripts/flash/`):
 
@@ -109,22 +110,29 @@ What was run (1× H100, `scripts/flash/`):
 2. Draft training: 100 epochs, batch 64, 411 train / 21 validation episodes, with `--cache-prefixes --confidence`
    (~5 min to cache prefixes in host RAM, then ~50 min at 0.038 s/step).
 
-Validation (21 held-out episodes, first 5 executed actions, draft vs the bf16 teacher on the same frame):
+Validation (21 held-out episodes, first 5 executed actions, draft vs the bf16 teacher's zero-noise chunk on the same
+frame; this is the training objective, **not** the verifier's acceptance test):
 
-| Step | RMS dist | Steps within 0.15 | Chunks with all 5 within 0.15 | Rounds accepting nothing | Gripper sign acc. |
+| Step | RMS dist | Steps within 0.15 | Chunks with all 5 within 0.15 | Rounds whose first step is outside 0.15 | Gripper sign acc. |
 | ---: | ---: | ---: | ---: | ---: | ---: |
 | 37,000 (best) | 0.195 | 34.6 % | 7.5 % | 62 % | 97.8 % |
 | 78,537 (final) | 0.211 | 29.1 % | 3.9 % | 78 % | 97.8 % |
 
-For comparison, the paper reports on LIBERO-Spatial (π0, H = 50, replan 12) an average accepted prefix of 75.8 % of the
-replan window and 71.6 % of rounds on the flash path. Findings:
+The paper reports on LIBERO-Spatial (π0, H = 50, replan 12) an average accepted prefix of 75.8 % of the replan window
+and 71.6 % of rounds on the flash path. Those are verifier acceptances, so they are not comparable with the table above.
 
-- **Low agreement.** At the best checkpoint 62 % of rounds would accept nothing (teacher proxy), so most rounds would
-  pay for a flash attempt and then a full round. This is an offline proxy (the real verifier compares against Action
-  Expert reconstructions with the previous round's KV cache), but the gap to the paper is large.
+**Why the proxy is not the verifier.** The verifier noises the draft to x_t = t·noise + (1 − t)·draft with t ∈ {0.10,
+0.05} and accepts steps where the Action Expert's endpoint x_t − t·v (its estimate of the clean chunk given a sample that
+is 90-95 % draft) stays within 0.15 of the draft. It asks whether the policy finds the draft plausible, whereas the
+proxy asks whether the draft equals one particular sample (zero noise) of a flow policy that can produce several valid
+chunks. The proxy is therefore expected to underestimate acceptance, by an unknown amount.
+
+Findings that do not depend on the proxy:
+
 - **Overfitting.** Validation RMS plateaus near 0.195-0.21 from ~16k steps while training loss keeps falling (action
   loss 0.028 → 0.008).
-- **Confidence head unusable as trained.** On held-out episodes it is overconfident (mean p = 0.81 vs 35 % accepted, BCE
+- **Confidence head miscalibrated for its training labels.** Those labels are the proxy above, so this says nothing
+  about verifier acceptance; on held-out episodes it is overconfident (mean p = 0.81 vs 35 % of steps within 0.15, BCE
   1.04, expected accepted prefix 3.33 vs 1.00 actual) and almost never predicts a fully rejected round (recall 0.3 %).
 
 Per-eval metrics: [`docs/pi05_rtx5090_eval/flash/`](pi05_rtx5090_eval/flash/). The code stays for reference:

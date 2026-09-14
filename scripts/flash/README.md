@@ -3,9 +3,9 @@
 Implementation of [Realtime-VLA FLASH](https://arxiv.org/abs/2605.13778) for openpi's PyTorch pi0/pi05 models, adapted
 from [dexmal/realtime-vla-flash](https://github.com/dexmal/realtime-vla-flash) (Apache-2.0, π0 only).
 
-**Not pursued.** On LIBERO-Spatial the trained draft agreed with the full policy too rarely (34.6 % of executed steps
-within 0.15; 62 % of rounds would accept nothing) for FLASH to beat the 24.2 ms NVFP4 baseline. Results and findings:
-[`docs/pi05_rtx5090_latency.md`](../../docs/pi05_rtx5090_latency.md#tried-and-dropped-flash-speculative-inference).
+**Status: inconclusive.** A 100-epoch LIBERO-Spatial draft reaches 34.6 % of executed steps within 0.15 of the
+teacher's zero-noise chunk, but that proxy is stricter than the verifier; acceptance under the real verifier is being
+measured. Details: [`docs/pi05_rtx5090_latency.md`](../../docs/pi05_rtx5090_latency.md#inconclusive-flash-speculative-inference).
 
 | Step | Script | Status |
 | --- | --- | --- |
