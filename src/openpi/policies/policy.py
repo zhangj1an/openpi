@@ -21,6 +21,48 @@ from openpi.shared import nnx_utils
 BasePolicy: TypeAlias = _base_policy.BasePolicy
 
 
+class _TorchChunkGraph:
+    """A whole PyTorch inference as one CUDA graph: image conversion, preprocessing, the prefix pass and every
+    denoising step. Inputs are copied into static buffers and the graph is replayed, so a call costs one launch
+    instead of thousands. Replay is bit-identical to running the same code eagerly.
+    """
+
+    def __init__(self, sample_actions, device: str, inputs: dict, noise_shape: tuple[int, ...], sample_kwargs: dict):
+        self._sample_actions = sample_actions
+        self._device = device
+        self._sample_kwargs = sample_kwargs
+        self._static = jax.tree.map(lambda x: torch.from_numpy(np.array(x)).to(device)[None, ...], inputs)
+        self._noise = torch.zeros(noise_shape, dtype=torch.float32, device=device)
+
+        # Run on a side stream first so lazy initialisation (cuBLAS handles, autotuning) happens outside the capture.
+        stream = torch.cuda.Stream(device)
+        stream.wait_stream(torch.cuda.current_stream(device))
+        with torch.cuda.stream(stream), torch.inference_mode():
+            for _ in range(3):
+                self._run()
+        torch.cuda.current_stream(device).wait_stream(stream)
+
+        self._graph = torch.cuda.CUDAGraph()
+        with torch.inference_mode(), torch.cuda.graph(self._graph):
+            self._actions = self._run()
+
+    def _run(self) -> torch.Tensor:
+        # Observation.from_dict replaces the images in the dict it is given; hand it fresh containers every time.
+        data = {k: dict(v) if isinstance(v, dict) else v for k, v in self._static.items()}
+        observation = _model.Observation.from_dict(data)
+        return self._sample_actions(self._device, observation, noise=self._noise, **self._sample_kwargs)
+
+    def __call__(self, inputs: dict, noise: np.ndarray | None) -> np.ndarray:
+        for dst, src in zip(jax.tree.leaves(self._static), jax.tree.leaves(inputs), strict=True):
+            dst.copy_(torch.from_numpy(np.asarray(src)).view(dst.shape))
+        if noise is None:
+            self._noise.normal_()
+        else:
+            self._noise.copy_(torch.from_numpy(noise).view(self._noise.shape))
+        self._graph.replay()
+        return self._actions[0].cpu().numpy()
+
+
 class Policy(BasePolicy):
     def __init__(
         self,
@@ -33,6 +75,8 @@ class Policy(BasePolicy):
         metadata: dict[str, Any] | None = None,
         pytorch_device: str = "cpu",
         is_pytorch: bool = False,
+        warmup_token_lens: Sequence[int] | None = None,
+        pytorch_cuda_graph: bool = True,
     ):
         """Initialize the Policy.
 
@@ -46,6 +90,10 @@ class Policy(BasePolicy):
             pytorch_device: Device to use for PyTorch models (e.g., "cpu", "cuda:0").
                           Only relevant when is_pytorch=True.
             is_pytorch: Whether the model is a PyTorch model. If False, assumes JAX model.
+            warmup_token_lens: Prompt lengths the tokenizer can pad to. On the first request every one of them is
+                compiled, so a later prompt of a different length does not stall a running episode.
+            pytorch_cuda_graph: For PyTorch models on CUDA, capture each input shape's whole inference into a CUDA
+                graph and replay it. Use a compile mode without its own CUDA graphs (e.g. "max-autotune-no-cudagraphs").
         """
         self._model = model
         self._input_transform = _transforms.compose(transforms)
@@ -54,11 +102,14 @@ class Policy(BasePolicy):
         self._metadata = metadata or {}
         self._is_pytorch_model = is_pytorch
         self._pytorch_device = pytorch_device
+        self._warmup_token_lens = list(warmup_token_lens or [])
 
         if self._is_pytorch_model:
             self._model = self._model.to(pytorch_device)
             self._model.eval()
             self._sample_actions = model.sample_actions
+            self._use_cuda_graph = pytorch_cuda_graph and str(pytorch_device).startswith("cuda")
+            self._torch_graphs: dict = {}
         else:
             # JAX model setup
             self._sample_actions = nnx_utils.module_jit(model.sample_actions)
@@ -88,6 +139,19 @@ class Policy(BasePolicy):
         jitted = jax.jit(infer_core)
         return lambda rng, inputs, noise: jitted(state, rng, inputs, noise)
 
+    def _warmup_prompt_lengths(self, inputs: dict, noise: np.ndarray | None) -> None:
+        """Compile every prompt-length shape using this request's structure, with a throwaway RNG key."""
+        lens, self._warmup_token_lens = self._warmup_token_lens, []
+        current = np.shape(inputs["tokenized_prompt"])[-1]
+        for n in lens:
+            if n == current:
+                continue
+            dummy = {**inputs, "tokenized_prompt": np.zeros(n, np.int32), "tokenized_prompt_mask": np.zeros(n, bool)}
+            dummy["tokenized_prompt_mask"][0] = True
+            start = time.monotonic()
+            self._jax_infer(jax.random.key(0), dummy, noise)
+            logging.info("Compiled prompt length %d in %.1f s", n, time.monotonic() - start)
+
     @override
     def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
         # Make a copy since transformations may modify the inputs in place.
@@ -98,8 +162,25 @@ class Policy(BasePolicy):
         if not self._is_pytorch_model:
             if noise is not None:
                 noise = np.asarray(noise, dtype=np.float32)
+            if self._warmup_token_lens:
+                self._warmup_prompt_lengths(inputs, noise)
             self._rng, actions = self._jax_infer(self._rng, inputs, noise)
             outputs = {"state": np.asarray(inputs["state"], dtype=np.float32), "actions": np.asarray(actions)}
+        elif self._use_cuda_graph:
+            if noise is not None:
+                noise = np.asarray(noise, dtype=np.float32)
+            key = (
+                jax.tree.structure(inputs),
+                tuple((np.shape(x), np.asarray(x).dtype.str) for x in jax.tree.leaves(inputs)),
+            )
+            graph = self._torch_graphs.get(key)
+            if graph is None:
+                cfg = self._model.config
+                noise_shape = (1, cfg.action_horizon, cfg.action_dim)
+                graph = self._torch_graphs[key] = _TorchChunkGraph(
+                    self._sample_actions, self._pytorch_device, inputs, noise_shape, dict(self._sample_kwargs)
+                )
+            outputs = {"state": np.asarray(inputs["state"]), "actions": graph(inputs, noise)}
         else:
             # Convert inputs to PyTorch tensors and move to correct device
             inputs = jax.tree.map(lambda x: torch.from_numpy(np.array(x)).to(self._pytorch_device)[None, ...], inputs)
