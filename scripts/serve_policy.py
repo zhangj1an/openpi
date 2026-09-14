@@ -1,7 +1,17 @@
 import dataclasses
 import enum
 import logging
+import os
 import socket
+
+# Record every GPU op type into XLA command buffers (CUDA graphs), not just the default subset. Serving runs one
+# fixed-shape program per request, so launch overhead is pure cost: ~1 ms per call at batch size 1 on an RTX 5090.
+# Must be set before JAX is imported; an explicit XLA_FLAGS from the environment takes precedence.
+os.environ.setdefault(
+    "XLA_FLAGS",
+    "--xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUBLASLT,CUSTOM_CALL,CUDNN,WHILE,CONDITIONAL "
+    "--xla_gpu_graph_min_graph_size=1",
+)
 
 import tyro
 
