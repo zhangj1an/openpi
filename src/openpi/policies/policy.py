@@ -109,6 +109,14 @@ class Policy(BasePolicy):
             self._model.eval()
             self._sample_actions = model.sample_actions
             self._use_cuda_graph = pytorch_cuda_graph and str(pytorch_device).startswith("cuda")
+            compile_mode = getattr(getattr(model, "config", None), "pytorch_compile_mode", None)
+            if self._use_cuda_graph and compile_mode in ("max-autotune", "reduce-overhead"):
+                logging.warning(
+                    "pytorch_compile_mode=%s manages its own CUDA graphs; not capturing whole inferences. "
+                    "Use max-autotune-no-cudagraphs for the fastest path.",
+                    compile_mode,
+                )
+                self._use_cuda_graph = False
             self._torch_graphs: dict = {}
         else:
             # JAX model setup
@@ -139,17 +147,38 @@ class Policy(BasePolicy):
         jitted = jax.jit(infer_core)
         return lambda rng, inputs, noise: jitted(state, rng, inputs, noise)
 
+    def _torch_graph_for(self, inputs: dict) -> _TorchChunkGraph:
+        leaves = jax.tree.leaves(inputs)
+        key = (jax.tree.structure(inputs), tuple((np.shape(x), np.asarray(x).dtype.str) for x in leaves))
+        graph = self._torch_graphs.get(key)
+        if graph is None:
+            cfg = self._model.config
+            noise_shape = (1, cfg.action_horizon, cfg.action_dim)
+            graph = self._torch_graphs[key] = _TorchChunkGraph(
+                self._sample_actions, self._pytorch_device, inputs, noise_shape, dict(self._sample_kwargs)
+            )
+        return graph
+
     def _warmup_prompt_lengths(self, inputs: dict, noise: np.ndarray | None) -> None:
-        """Compile every prompt-length shape using this request's structure, with a throwaway RNG key."""
+        """Compile every prompt-length shape using this request's structure (JAX: throwaway RNG key; PyTorch: capture
+        a CUDA graph per length)."""
         lens, self._warmup_token_lens = self._warmup_token_lens, []
         current = np.shape(inputs["tokenized_prompt"])[-1]
         for n in lens:
             if n == current:
                 continue
-            dummy = {**inputs, "tokenized_prompt": np.zeros(n, np.int32), "tokenized_prompt_mask": np.zeros(n, bool)}
+            # Same dtypes as the real request, so the warmed-up shape is the one later requests hit.
+            dummy = {
+                **inputs,
+                "tokenized_prompt": np.zeros(n, np.asarray(inputs["tokenized_prompt"]).dtype),
+                "tokenized_prompt_mask": np.zeros(n, np.asarray(inputs["tokenized_prompt_mask"]).dtype),
+            }
             dummy["tokenized_prompt_mask"][0] = True
             start = time.monotonic()
-            self._jax_infer(jax.random.key(0), dummy, noise)
+            if self._is_pytorch_model:
+                self._torch_graph_for(dummy)
+            else:
+                self._jax_infer(jax.random.key(0), dummy, noise)
             logging.info("Compiled prompt length %d in %.1f s", n, time.monotonic() - start)
 
     @override
@@ -169,18 +198,9 @@ class Policy(BasePolicy):
         elif self._use_cuda_graph:
             if noise is not None:
                 noise = np.asarray(noise, dtype=np.float32)
-            key = (
-                jax.tree.structure(inputs),
-                tuple((np.shape(x), np.asarray(x).dtype.str) for x in jax.tree.leaves(inputs)),
-            )
-            graph = self._torch_graphs.get(key)
-            if graph is None:
-                cfg = self._model.config
-                noise_shape = (1, cfg.action_horizon, cfg.action_dim)
-                graph = self._torch_graphs[key] = _TorchChunkGraph(
-                    self._sample_actions, self._pytorch_device, inputs, noise_shape, dict(self._sample_kwargs)
-                )
-            outputs = {"state": np.asarray(inputs["state"]), "actions": graph(inputs, noise)}
+            if self._warmup_token_lens:
+                self._warmup_prompt_lengths(inputs, noise)
+            outputs = {"state": np.asarray(inputs["state"]), "actions": self._torch_graph_for(inputs)(inputs, noise)}
         else:
             # Convert inputs to PyTorch tensors and move to correct device
             inputs = jax.tree.map(lambda x: torch.from_numpy(np.array(x)).to(self._pytorch_device)[None, ...], inputs)

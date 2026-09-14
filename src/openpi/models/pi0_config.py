@@ -32,7 +32,9 @@ class Pi0Config(_model.BaseModelConfig):
     # This config option is not used directly by the model, but it is read by the ModelTransformFactory.
     discrete_state_input: bool = None  # type: ignore
 
-    pytorch_compile_mode: str | None = "max-autotune"
+    # The PyTorch Policy captures each whole inference into its own CUDA graph, so the compiled function must not
+    # manage CUDA graphs itself: "max-autotune-no-cudagraphs" rather than "max-autotune" / "reduce-overhead".
+    pytorch_compile_mode: str | None = "max-autotune-no-cudagraphs"
 
     def __post_init__(self):
         if self.max_token_len is None:
