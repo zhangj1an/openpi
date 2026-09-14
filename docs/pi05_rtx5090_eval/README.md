@@ -20,6 +20,12 @@ One real LIBERO frame, fixed noise. `lat_*`, `flags_*`, `jax_*`, `branch_lat_*`:
 `exact_*`, `branch_exact_*`: JAX actions with autotuning disabled, `maxabs_vs_baseline` against upstream `main`;
 `torch_*`: PyTorch path, `maxabs_vs_jax_ref` against openpi JAX with identical noise.
 
+## `flash/`
+
+FLASH draft training on LIBERO-Spatial (1× H100, 100 epochs, `--cache-prefixes --confidence`, bf16 teacher):
+`metrics.jsonl` has the validation metrics every 500 steps, `draft_meta.json` those of the best checkpoint (step
+37,000). The checkpoint itself is not in the repository. Findings: `docs/pi05_rtx5090_latency.md`.
+
 ## `scripts/`
 
 - `sim_client_openpi.py`: LIBERO client (openpi websocket protocol; `--server vllm-omni`, `--flash`). Runs in an environment with LIBERO (e.g. LeRobot's `hf-libero`) and `openpi-client`.

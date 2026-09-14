@@ -3,10 +3,14 @@
 Implementation of [Realtime-VLA FLASH](https://arxiv.org/abs/2605.13778) for openpi's PyTorch pi0/pi05 models, adapted
 from [dexmal/realtime-vla-flash](https://github.com/dexmal/realtime-vla-flash) (Apache-2.0, π0 only).
 
+**Not pursued.** On LIBERO-Spatial the trained draft agreed with the full policy too rarely (34.6 % of executed steps
+within 0.15; 62 % of rounds would accept nothing) for FLASH to beat the 24.2 ms NVFP4 baseline. Results and findings:
+[`docs/pi05_rtx5090_latency.md`](../../docs/pi05_rtx5090_latency.md#tried-and-dropped-flash-speculative-inference).
+
 | Step | Script | Status |
 | --- | --- | --- |
-| 1. Teacher targets | `make_teacher_targets.py` | tested (RTX 5090: 35 frames/s with NVFP4) |
-| 2. Draft training | `train_draft.py` | tested (2000-frame smoke run incl. resume); 100-epoch LIBERO-Spatial run in progress |
+| 1. Teacher targets | `make_teacher_targets.py` | tested (RTX 5090 NVFP4 and H100 bf16: ~35 frames/s after compilation) |
+| 2. Draft training | `train_draft.py` | tested: 100-epoch LIBERO-Spatial run with `--confidence` (1× H100, ~55 min) |
 | 3. Serving | `serve_flash_policy.py` + `openpi.policies.flash_policy.FlashPolicy` | **not yet validated end to end** |
 
 ## Setup (any Blackwell GPU for NVFP4, e.g. B200)

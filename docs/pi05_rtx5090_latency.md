@@ -90,23 +90,47 @@ uv run scripts/serve_policy.py --pytorch-quantization nvfp4 \
 | vLLM-Omni `pi05-cudagraph` | openpi `pi05_libero` converted | 99 / 100 | 93.3 |
 | vLLM-Omni `pi05-cudagraph` | `lerobot/pi05_libero_finetuned_v044` | 97 / 100 | 94.6 |
 
-## In progress: FLASH speculative inference
+## Tried and dropped: FLASH speculative inference
 
 [Realtime-VLA FLASH](https://arxiv.org/abs/2605.13778) (code: `dexmal/realtime-vla-flash`, π0 only) skips the
 PaliGemma prefill on most replanning rounds: a ~110M-parameter draft (one Gemma block initialized from VLM layer 0,
 learned action queries) proposes the chunk from the current prefix embeddings, the Action Expert reconstructs the
 endpoint at t ∈ {0.10, 0.05} using the last full round's KV cache, and the longest prefix within δ = 0.15 is executed;
-rejection or a predicted gripper switch falls back to a full round. Gated on NVFP4 keeping 99–100 % success (it does).
+rejection or a predicted gripper switch falls back to a full round. A [DSpark](https://arxiv.org/abs/2607.05147)-style
+confidence head (per-action acceptance probability) was trained jointly with the draft.
 
-Status:
-1. Teacher targets: NVFP4 policy with zero noise over all 52,970 LIBERO-Spatial training frames (~25 min at 35 frames/s).
-2. Draft training: 5 epochs, prefix embeddings recomputed on the fly (a cached prefix would be hundreds of GB).
-3. Serving: `FlashPolicy` with separate CUDA graphs for full rounds (exposing the prefix KV cache) and flash rounds
-   (SigLIP + draft + K=2 batched verification reading that cache without copies); then the same 100-episode eval.
+**Decision: not pursued.** The trained draft agrees with the full policy too rarely for a flash path to pay off against
+the 24.2 ms NVFP4 baseline, so FLASH serving was never evaluated in closed loop.
 
-Code: `src/openpi/models_pytorch/flash.py`, `src/openpi/policies/flash_policy.py`, `scripts/flash/` (see
-`scripts/flash/README.md`). Teacher generation and draft training are tested; FLASH serving is not yet validated end to
-end.
+What was run (1× H100, `scripts/flash/`):
+
+1. Teacher targets: bfloat16 `pi05_libero` (no quantization; H100 has no NVFP4 kernels), zero noise, all 52,970
+   LIBERO-Spatial frames, 32 min.
+2. Draft training: 100 epochs, batch 64, 411 train / 21 validation episodes, with `--cache-prefixes --confidence`
+   (~5 min to cache prefixes in host RAM, then ~50 min at 0.038 s/step).
+
+Validation (21 held-out episodes, first 5 executed actions, draft vs the bf16 teacher on the same frame):
+
+| Step | RMS dist | Steps within 0.15 | Chunks with all 5 within 0.15 | Rounds accepting nothing | Gripper sign acc. |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 37,000 (best) | 0.195 | 34.6 % | 7.5 % | 62 % | 97.8 % |
+| 78,537 (final) | 0.211 | 29.1 % | 3.9 % | 78 % | 97.8 % |
+
+For comparison, the paper reports on LIBERO-Spatial (π0, H = 50, replan 12) an average accepted prefix of 75.8 % of the
+replan window and 71.6 % of rounds on the flash path. Findings:
+
+- **Low agreement.** At the best checkpoint 62 % of rounds would accept nothing (teacher proxy), so most rounds would
+  pay for a flash attempt and then a full round. This is an offline proxy (the real verifier compares against Action
+  Expert reconstructions with the previous round's KV cache), but the gap to the paper is large.
+- **Overfitting.** Validation RMS plateaus near 0.195-0.21 from ~16k steps while training loss keeps falling (action
+  loss 0.028 → 0.008).
+- **Confidence head unusable as trained.** On held-out episodes it is overconfident (mean p = 0.81 vs 35 % accepted, BCE
+  1.04, expected accepted prefix 3.33 vs 1.00 actual) and almost never predicts a fully rejected round (recall 0.3 %).
+
+Per-eval metrics: [`docs/pi05_rtx5090_eval/flash/`](pi05_rtx5090_eval/flash/). The code stays for reference:
+`src/openpi/models_pytorch/flash.py` (draft head with an action-slot forward bitwise equal to the full block,
+`triton_ops.py` kernels matching PyTorch's rounding, confidence head), `src/openpi/policies/flash_policy.py` and
+`scripts/flash/` (see `scripts/flash/README.md`). FLASH serving is not validated end to end.
 
 ## Raw results
 
