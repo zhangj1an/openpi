@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+import dataclasses
 import logging
 import os
 import pathlib
@@ -6,6 +8,7 @@ from typing import Any
 import jax.numpy as jnp
 
 import openpi.models.model as _model
+import openpi.models.tokenizer as _tokenizer
 import openpi.policies.policy as _policy
 import openpi.shared.download as download
 from openpi.training import checkpoints as _checkpoints
@@ -22,6 +25,7 @@ def create_trained_policy(
     default_prompt: str | None = None,
     norm_stats: dict[str, transforms.NormStats] | None = None,
     pytorch_device: str | None = None,
+    token_len_buckets: Sequence[int] | None = None,
 ) -> _policy.Policy:
     """Create a policy from a trained checkpoint.
 
@@ -37,6 +41,9 @@ def create_trained_policy(
             from the checkpoint directory.
         pytorch_device: Device to use for PyTorch models (e.g., "cpu", "cuda", "cuda:0").
                       If None and is_pytorch=True, will use "cuda" if available, otherwise "cpu".
+        token_len_buckets: Pad prompts to the smallest of these lengths that fits (the model's `max_token_len` is
+            always included) instead of always to `max_token_len`. Outputs are unchanged since padding is masked,
+            but a shorter prefix is faster. Every bucket is compiled on the first request.
 
     Note:
         The function automatically detects whether the model is PyTorch-based by checking for the
@@ -72,6 +79,23 @@ def create_trained_policy(
         except ImportError:
             pytorch_device = "cpu"
 
+    model_input_transforms = list(data_config.model_transforms.inputs)
+    if token_len_buckets:
+        model_input_transforms = [
+            dataclasses.replace(
+                t,
+                tokenizer=_tokenizer.PaligemmaTokenizer(
+                    train_config.model.max_token_len, len_buckets=token_len_buckets
+                ),
+            )
+            if isinstance(t, transforms.TokenizePrompt)
+            else t
+            for t in model_input_transforms
+        ]
+    warmup_token_lens = next(
+        (t.tokenizer.len_buckets for t in model_input_transforms if isinstance(t, transforms.TokenizePrompt)), None
+    )
+
     return _policy.Policy(
         model,
         transforms=[
@@ -79,7 +103,7 @@ def create_trained_policy(
             transforms.InjectDefaultPrompt(default_prompt),
             *data_config.data_transforms.inputs,
             transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
-            *data_config.model_transforms.inputs,
+            *model_input_transforms,
         ],
         output_transforms=[
             *data_config.model_transforms.outputs,
@@ -91,4 +115,5 @@ def create_trained_policy(
         metadata=train_config.policy_metadata,
         is_pytorch=is_pytorch,
         pytorch_device=pytorch_device if is_pytorch else None,
+        warmup_token_lens=warmup_token_lens if token_len_buckets else None,
     )

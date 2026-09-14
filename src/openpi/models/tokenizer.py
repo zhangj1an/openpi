@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 import logging
 import os
 
@@ -12,12 +13,20 @@ import openpi.shared.download as download
 
 
 class PaligemmaTokenizer:
-    def __init__(self, max_len: int = 48):
+    def __init__(self, max_len: int = 48, len_buckets: Sequence[int] | None = None):
         self._max_len = max_len
+        # Pad to the smallest bucket that fits the prompt instead of always to `max_len` (`max_len` is always the last
+        # bucket). Padding is masked out of attention and positions, so model outputs are unchanged, but each bucket is
+        # a separate compiled shape. Inference only: training batches need a single length.
+        self._len_buckets = sorted({b for b in (len_buckets or ()) if 0 < b < max_len} | {max_len})
 
         path = download.maybe_download("gs://big_vision/paligemma_tokenizer.model", gs={"token": "anon"})
         with path.open("rb") as f:
             self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
+
+    @property
+    def len_buckets(self) -> list[int]:
+        return list(self._len_buckets)
 
     def tokenize(self, prompt: str, state: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
         cleaned_text = prompt.strip().replace("_", " ").replace("\n", " ")
@@ -32,8 +41,9 @@ class PaligemmaTokenizer:
             # tokenize "\n" separately as the "start of answer" token
             tokens = self._tokenizer.encode(cleaned_text, add_bos=True) + self._tokenizer.encode("\n")
         tokens_len = len(tokens)
-        if tokens_len < self._max_len:
-            padding = [False] * (self._max_len - tokens_len)
+        pad_len = next((b for b in self._len_buckets if b >= tokens_len), self._max_len)
+        if tokens_len < pad_len:
+            padding = [False] * (pad_len - tokens_len)
             mask = [True] * tokens_len + padding
             tokens = tokens + padding
         else:
