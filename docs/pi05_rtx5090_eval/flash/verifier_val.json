@@ -1,0 +1,109 @@
+{
+ "args": {
+  "dataset_dir": "/dev/shm/data/libero",
+  "checkpoint_dir": "/workspace/ckpt/pi05_libero_pytorch",
+  "draft_dir": "/workspace/flash/draft_libero_spatial_conf",
+  "teacher": "/workspace/flash/teacher_libero_spatial_bf16.npz",
+  "output": "/workspace/flash/verifier/val.json",
+  "config": "pi05_libero",
+  "token_len_buckets": [
+   48
+  ],
+  "pytorch_quantization": null,
+  "split": "val",
+  "max_episodes": null,
+  "val_episode_frac": 0.05,
+  "seed": 0,
+  "noise_seed": 0,
+  "verify_timesteps": [
+   0.1,
+   0.05
+  ],
+  "threshold": 0.15,
+  "max_exec_steps": 5,
+  "full_every_n_flash_rounds": 0,
+  "warmup_rounds": 12
+ },
+ "gpu": "NVIDIA H100 80GB HBM3",
+ "draft_step": 37000,
+ "episodes": [
+  1267,
+  1278,
+  1292,
+  1334,
+  1372,
+  1380,
+  1389,
+  1472,
+  1474,
+  1494,
+  1501,
+  1518,
+  1524,
+  1531,
+  1535,
+  1572,
+  1603,
+  1611,
+  1647,
+  1664,
+  1674
+ ],
+ "summary": {
+  "rounds": 592,
+  "executed_actions": 2731,
+  "round_kinds": {
+   "fallback_gripper": 0.09628378378378379,
+   "fallback_reject": 0.19594594594594594,
+   "flash": 0.6722972972972973,
+   "full": 0.03547297297297297
+  },
+  "flash_attempts": 571,
+  "attempt_accept_rate": 0.7758318739054291,
+  "attempt_mean_accepted": 3.453590192644483,
+  "attempt_accepted_hist": [
+   128,
+   34,
+   11,
+   9,
+   56,
+   333
+  ],
+  "attempt_gripper_switch_rate": 0.09982486865148861,
+  "flash_round_mean_accepted_frac": 0.8849246231155778,
+  "flash_path_rate": 0.6722972972972973,
+  "median_infer_ms": {
+   "fallback_reject": 53.227479569613934,
+   "flash": 8.439764380455017,
+   "fallback_gripper": 53.10372821986675,
+   "full": 45.41046731173992
+  },
+  "ms_per_action": 4.959446990863171,
+  "full_only_ms_per_action": 9.082093462347984,
+  "speedup_per_action": 1.831271405678899,
+  "executed_vs_teacher": {
+   "full": {
+    "steps": 970,
+    "mean": 0.0364639143776784,
+    "median": 0.028372439578364196,
+    "p90": 0.070546740610371,
+    "frac_within_0.15": 0.9927835051546392
+   },
+   "flash": {
+    "steps": 1761,
+    "mean": 0.19624863447027277,
+    "median": 0.18340190427483732,
+    "p90": 0.3044287139867758,
+    "frac_within_0.15": 0.3231118682566723
+   }
+  },
+  "attempt_mean_accepted_by_threshold": {
+   "0.05": 0.010507880910683012,
+   "0.1": 0.8126094570928196,
+   "0.15": 3.453590192644483,
+   "0.2": 4.781085814360771,
+   "0.3": 5.0,
+   "0.5": 5.0
+  }
+ }
+}

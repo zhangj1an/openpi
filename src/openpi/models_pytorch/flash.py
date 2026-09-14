@@ -200,11 +200,15 @@ def reconstruct_endpoints(model, state, prefix_pad_masks, past_key_values, draft
     return x_t - t * v_t
 
 
-def step_accepted(draft, reference, config: FlashConfig) -> torch.Tensor:
-    """Whether each draft action is within `threshold` (RMS over the first `dist_dims`) of the reference: (..., H)."""
+def step_distance(draft, reference, config: FlashConfig) -> torch.Tensor:
+    """RMS distance over the first `dist_dims` between each draft action and the reference: (..., H)."""
     d = config.dist_dims
-    dist = torch.linalg.vector_norm(reference[..., :d] - draft[..., :d], dim=-1) / math.sqrt(d)
-    return dist <= config.threshold
+    return torch.linalg.vector_norm(reference[..., :d] - draft[..., :d], dim=-1) / math.sqrt(d)
+
+
+def step_accepted(draft, reference, config: FlashConfig) -> torch.Tensor:
+    """Whether each draft action is within `threshold` of the reference: (..., H)."""
+    return step_distance(draft, reference, config) <= config.threshold
 
 
 def accepted_prefix_len(draft, endpoints, config: FlashConfig) -> torch.Tensor:

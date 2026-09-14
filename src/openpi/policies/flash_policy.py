@@ -49,6 +49,9 @@ class FlashPolicy(_base_policy.BasePolicy):
 
     Request extras: `flash_reset` (bool) forces a full round (send it at the start of an episode); `executed_steps`
     (int) is how many actions of the previous response were executed (default: all returned, up to max_exec_steps).
+    With `diagnostics=True`, `flash` also carries the verifier's own result for every flash attempt (`draft_accepted`,
+    `gripper_switch`, per-step `step_dist`, and the normalized `draft`), and every response the normalized `actions`.
+
     Response extras: `accepted_prefix_len` and `flash` statistics. A rejected draft or a predicted gripper switch falls
     back to a full round within the same request, so every response carries at least one action.
     """
@@ -61,6 +64,7 @@ class FlashPolicy(_base_policy.BasePolicy):
         *,
         num_steps: int = 10,
         compile_mode: str | None = None,
+        diagnostics: bool = False,
     ):
         if not policy._is_pytorch_model:  # noqa: SLF001
             raise ValueError("FlashPolicy requires a PyTorch policy")
@@ -70,6 +74,7 @@ class FlashPolicy(_base_policy.BasePolicy):
         self._draft = draft.to(self._device, torch.bfloat16).eval()
         self._config = config
         self._num_steps = num_steps
+        self._diagnostics = diagnostics
         self._timesteps = torch.tensor(config.verify_timesteps, dtype=torch.float32, device=self._device)
         cfg = self._model.config
         self._noise_shape = (1, cfg.action_horizon, cfg.action_dim)
@@ -144,6 +149,7 @@ class FlashPolicy(_base_policy.BasePolicy):
         periodic_full = cfg.full_every_n_flash_rounds > 0 and self._flash_since_full >= cfg.full_every_n_flash_rounds
         use_flash = not reset and slot.cache_ready and self._last_gripper is not None and not periodic_full
         accepted, kind = 0, "full"
+        verify: dict[str, Any] = {}
         if use_flash:
             chunk, endpoints = self._flash(slot)
             prev = torch.tensor(self._last_gripper, device=self._device)
@@ -151,6 +157,15 @@ class FlashPolicy(_base_policy.BasePolicy):
             accepted_t = _flash.accepted_prefix_len(chunk, endpoints, cfg)
             switch_t = _flash.gripper_switch_in(candidates, prev, cfg, cfg.max_exec_steps)
             accepted, switch = int(accepted_t), bool(switch_t)
+            if self._diagnostics:  # the verifier's own result, also for rounds that fall back
+                h = min(chunk.shape[-2], cfg.max_exec_steps)
+                dist = _flash.step_distance(chunk[:, :h], endpoints[:, :h], cfg).amax(dim=0)  # worst timestep per step
+                verify = {
+                    "draft_accepted": accepted,
+                    "gripper_switch": switch,
+                    "step_dist": dist.float().cpu().tolist(),
+                    "draft": chunk[0, :h, : cfg.gripper_dim + 1].float().cpu().tolist(),
+                }
             if accepted > 0 and not switch:
                 actions = chunk[0, :accepted]
                 kind = "flash"
@@ -171,7 +186,9 @@ class FlashPolicy(_base_policy.BasePolicy):
         )
         outputs["accepted_prefix_len"] = int(accepted)
         outputs["policy_timing"] = {"infer_ms": (time.monotonic() - start) * 1000}
-        outputs["flash"] = {"round": kind}
+        outputs["flash"] = {"round": kind, **verify}
+        if self._diagnostics:
+            outputs["flash"]["actions"] = actions_np[:, : cfg.gripper_dim + 1].tolist()
         if sum(self.stats.values()) % 200 == 0:
             logging.info("flash stats %s", self.stats)
         return outputs

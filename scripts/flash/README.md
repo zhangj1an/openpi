@@ -3,15 +3,17 @@
 Implementation of [Realtime-VLA FLASH](https://arxiv.org/abs/2605.13778) for openpi's PyTorch pi0/pi05 models, adapted
 from [dexmal/realtime-vla-flash](https://github.com/dexmal/realtime-vla-flash) (Apache-2.0, π0 only).
 
-**Status: inconclusive.** A 100-epoch LIBERO-Spatial draft reaches 34.6 % of executed steps within 0.15 of the
-teacher's zero-noise chunk, but that proxy is stricter than the verifier; acceptance under the real verifier is being
-measured. Details: [`docs/pi05_rtx5090_latency.md`](../../docs/pi05_rtx5090_latency.md#inconclusive-flash-speculative-inference).
+**Status: not adopted; closed-loop success untested.** Offline under the real verifier (21 held-out LIBERO-Spatial
+episodes, H100 bf16) the draft reaches 67 % flash-path rounds and 1.8× lower latency per action, but accepted actions are
+0.196 RMS from the policy's output vs 0.036 for the policy's own samples, and the verifier accepts nearly as often
+when drafts are twice as accurate. Details:
+[`docs/pi05_rtx5090_latency.md`](../../docs/pi05_rtx5090_latency.md#flash-speculative-inference-faster-but-accepted-actions-deviate-from-the-policy).
 
 | Step | Script | Status |
 | --- | --- | --- |
 | 1. Teacher targets | `make_teacher_targets.py` | tested (RTX 5090 NVFP4 and H100 bf16: ~35 frames/s after compilation) |
 | 2. Draft training | `train_draft.py` | tested: 100-epoch LIBERO-Spatial run with `--confidence` (1× H100, ~55 min) |
-| 3. Serving | `serve_flash_policy.py` + `openpi.policies.flash_policy.FlashPolicy` | **not yet validated end to end** |
+| 3. Serving | `serve_flash_policy.py` + `openpi.policies.flash_policy.FlashPolicy` | runs offline on recorded episodes (`eval_verifier_offline.py`); no closed-loop rollout yet |
 
 ## Setup (any Blackwell GPU for NVFP4, e.g. B200)
 
@@ -78,7 +80,18 @@ uv run scripts/flash/train_draft.py \
   replan window. The best checkpoint by `val_rms_dist_exec` is written to `draft.safetensors`.
 - Masked camera slots are dropped (same as serving), so a single-camera robot trains and serves on 256 image tokens.
 
-## 3. Serving (not yet validated)
+## 3. Offline verifier check
+
+```bash
+uv run scripts/flash/eval_verifier_offline.py --dataset-dir /data/libero --checkpoint-dir /data/pi05_libero_pytorch \
+    --draft-dir /data/draft_libero_spatial --teacher /data/teacher_libero_spatial_nvfp4.npz --output verifier_val.json
+```
+
+Replays the draft's validation episodes (`--split val`, the same split as training) through `FlashPolicy` with
+`diagnostics=True`: flash-path rate, verifier acceptance (also at other thresholds, from the recorded distances),
+latency per round kind and per executed action, and the distance of executed actions to the teacher.
+
+## 4. Serving (no closed-loop rollout yet)
 
 ```bash
 uv run scripts/flash/serve_flash_policy.py --checkpoint-dir /data/pi05_libero_pytorch \

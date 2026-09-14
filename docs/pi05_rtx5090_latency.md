@@ -90,55 +90,85 @@ uv run scripts/serve_policy.py --pytorch-quantization nvfp4 \
 | vLLM-Omni `pi05-cudagraph` | openpi `pi05_libero` converted | 99 / 100 | 93.3 |
 | vLLM-Omni `pi05-cudagraph` | `lerobot/pi05_libero_finetuned_v044` | 97 / 100 | 94.6 |
 
-## Inconclusive: FLASH speculative inference
+## FLASH speculative inference: faster, but accepted actions deviate from the policy
 
 [Realtime-VLA FLASH](https://arxiv.org/abs/2605.13778) (code: `dexmal/realtime-vla-flash`, π0 only) skips the
 PaliGemma prefill on most replanning rounds: a ~110M-parameter draft (one Gemma block initialized from VLM layer 0,
 learned action queries) proposes the chunk from the current prefix embeddings, the Action Expert reconstructs the
 endpoint at t ∈ {0.10, 0.05} using the last full round's KV cache, and the longest prefix within δ = 0.15 is executed;
 rejection or a predicted gripper switch falls back to a full round. A [DSpark](https://arxiv.org/abs/2607.05147)-style
-confidence head (per-action acceptance probability) was trained jointly with the draft.
+confidence head (per-action acceptance probability) was trained jointly with the draft. The verifier settings match
+the reference implementation (`t_list = (0.10, 0.05)`, prefix rule, gripper fallback) with the paper's δ = 0.15.
 
-**Status: inconclusive.** A first analysis concluded the draft agrees with the full policy too rarely to pay off against
-the 24.2 ms NVFP4 baseline, but that rested on an offline proxy that is stricter than the real acceptance test (see
-"Why the proxy is not the verifier" below). Acceptance under the real verifier is being measured offline.
+**Status: not adopted; closed-loop success untested.** Under the real verifier the draft reaches the paper's
+flash-path rate and a 1.8× per-action speedup on an H100 (bf16), but the actions it gets accepted on unseen episodes are
+far from what the policy would output, and the verifier hardly distinguishes accurate from inaccurate drafts. Whether
+that costs task success needs closed-loop LIBERO rollouts, which were not run.
 
-What was run (1× H100, `scripts/flash/`):
+### What was run (1× H100, bfloat16, `scripts/flash/`)
 
 1. Teacher targets: bfloat16 `pi05_libero` (no quantization; H100 has no NVFP4 kernels), zero noise, all 52,970
    LIBERO-Spatial frames, 32 min.
-2. Draft training: 100 epochs, batch 64, 411 train / 21 validation episodes, with `--cache-prefixes --confidence`
-   (~5 min to cache prefixes in host RAM, then ~50 min at 0.038 s/step).
+2. Draft training: 100 epochs, batch 64, 411 train / 21 validation episodes, `--cache-prefixes --confidence`
+   (~5 min to cache prefixes in host RAM, then ~50 min at 0.038 s/step). Best checkpoint by validation RMS: step 37,000.
+3. Offline verifier check (`eval_verifier_offline.py`): recorded episodes replayed through `FlashPolicy` as a client
+   would serve them (full round at the start, then one request per replan at the frame after the executed actions, so
+   flash rounds verify against a KV cache several frames old). Observations follow the demonstration, not the policy's
+   own actions. Eager model with CUDA graphs, no `torch.compile`.
 
-Validation (21 held-out episodes, first 5 executed actions, draft vs the bf16 teacher's zero-noise chunk on the same
-frame; this is the training objective, **not** the verifier's acceptance test):
+### Verifier acceptance and latency (H100, bf16)
 
-| Step | RMS dist | Steps within 0.15 | Chunks with all 5 within 0.15 | Rounds whose first step is outside 0.15 | Gripper sign acc. |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 37,000 (best) | 0.195 | 34.6 % | 7.5 % | 62 % | 97.8 % |
-| 78,537 (final) | 0.211 | 29.1 % | 3.9 % | 78 % | 97.8 % |
+| Episodes | Rounds | Flash-path rounds | Attempts accepted | Accepted prefix (flash rounds) | Full / flash / fallback round (ms, median) | ms per action | Speedup per action |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 21 validation | 592 | 67.2 % | 77.6 % | 88.5 % of 5 | 45.4 / 8.4 / 53.2 | 4.96 | 1.83× |
+| 21 training | 514 | 71.2 % | 82.8 % | 93.8 % of 5 | 45.4 / 8.4 / 53.1 | 4.40 | 2.07× |
 
-The paper reports on LIBERO-Spatial (π0, H = 50, replan 12) an average accepted prefix of 75.8 % of the replan window
-and 71.6 % of rounds on the flash path. Those are verifier acceptances, so they are not comparable with the table above.
+Paper, FLASH-π0 on LIBERO-Spatial: 71.6 % flash-path rounds, 75.8 % accepted prefix. About 10 % of flash attempts
+fall back because a gripper switch is predicted.
 
-**Why the proxy is not the verifier.** The verifier noises the draft to x_t = t·noise + (1 − t)·draft with t ∈ {0.10,
-0.05} and accepts steps where the Action Expert's endpoint x_t − t·v (its estimate of the clean chunk given a sample that
-is 90-95 % draft) stays within 0.15 of the draft. It asks whether the policy finds the draft plausible, whereas the
-proxy asks whether the draft equals one particular sample (zero noise) of a flow policy that can produce several valid
-chunks. The proxy is therefore expected to underestimate acceptance, by an unknown amount.
+### How close are executed actions to the policy?
 
-Findings that do not depend on the proxy:
+RMS distance (first 6 dims, normalized action space) of executed actions to the teacher's zero-noise chunk on the same
+frame. For full rounds the actions are the policy's own output with random noise, which measures its sampling spread.
 
-- **Overfitting.** Validation RMS plateaus near 0.195-0.21 from ~16k steps while training loss keeps falling (action
-  loss 0.028 → 0.008).
-- **Confidence head miscalibrated for its training labels.** Those labels are the proxy above, so this says nothing
-  about verifier acceptance; on held-out episodes it is overconfident (mean p = 0.81 vs 35 % of steps within 0.15, BCE
-  1.04, expected accepted prefix 3.33 vs 1.00 actual) and almost never predicts a fully rejected round (recall 0.3 %).
+| Episodes | Full-round actions: mean / within 0.15 | Accepted draft actions: mean / within 0.15 |
+| --- | ---: | ---: |
+| 21 validation | 0.036 / 99.3 % | **0.196 / 32.3 %** |
+| 21 training | 0.035 / 99.2 % | 0.107 / 85.8 % |
 
-Per-eval metrics: [`docs/pi05_rtx5090_eval/flash/`](pi05_rtx5090_eval/flash/). The code stays for reference:
-`src/openpi/models_pytorch/flash.py` (draft head with an action-slot forward bitwise equal to the full block,
-`triton_ops.py` kernels matching PyTorch's rounding, confidence head), `src/openpi/policies/flash_policy.py` and
-`scripts/flash/` (see `scripts/flash/README.md`). FLASH serving is not validated end to end.
+- **Accepted actions deviate.** pi05_libero is nearly deterministic here (samples within 0.036 of the zero-noise chunk),
+  but on unseen episodes the accepted draft actions are 0.196 away, about 5× the policy's own spread.
+- **The verifier barely tracks draft quality.** Drafts are twice as accurate on training episodes (0.107 vs 0.196), yet
+  acceptance rises only from 77.6 % to 82.8 %. Its per-step distances cluster just under δ: raising δ from 0.10 to 0.15
+  lifts the mean accepted prefix from 0.8 to 3.5 steps. The endpoint reconstructed from x_t = t·noise + (1 − t)·draft
+  moves only about t times the policy's correction away from the draft, so small t makes the check lenient. The paper
+  reports the same risk (Table 7: the verifier alone at K = 2, δ = 0.15 drops LIBERO-10 success to 58.4 %) and recovers
+  it with phase-aware fallback and periodic full rounds.
+- **The draft overfits.** Validation RMS plateaus near 0.195-0.21 from ~16k of 78.5k steps while training loss keeps
+  falling, and accepted actions are much more accurate on training than on validation episodes.
+- **The confidence head is miscalibrated for its training labels** (distance to the teacher, not verifier acceptance):
+  on held-out episodes mean p = 0.81 vs 35 % of steps within 0.15.
+
+An earlier revision of this section first called FLASH ineffective from the draft-vs-teacher distance alone, then
+argued that distance underestimates acceptance because a flow policy has several valid chunks. Acceptance is indeed
+much higher than that distance suggested, but the policy's samples are tightly clustered, so the distance is a fair
+measure of how far executed actions are from the policy.
+
+### Expected speedup on the RTX 5090 (not measured)
+
+NVFP4 speeds up the PaliGemma prefill that flash rounds skip, so the gain shrinks. With the validation round mix above
+(67.2 % flash, 29.2 % fallback, 3.5 % full, 4.61 executed actions per round), a 24.2 ms full round and a flash round
+costing S ms, latency per action is (0.964·S + 7.9) / 4.61 ms vs 4.84 ms for full rounds only: 1.63× at S = 6,
+1.43× at S = 8, 1.15× at S = 12. Periodic full rounds, which the paper needs for reliability, reduce it further.
+
+### Numbers used here
+
+Training metrics: [`docs/pi05_rtx5090_eval/flash/metrics.jsonl`](pi05_rtx5090_eval/flash/metrics.jsonl); verifier
+summaries: [`verifier_val.json`](pi05_rtx5090_eval/flash/verifier_val.json),
+[`verifier_train21.json`](pi05_rtx5090_eval/flash/verifier_train21.json). Draft checkpoint (private):
+`zhangj1an/pi05-libero-spatial-flash-draft` on Hugging Face. Code: `src/openpi/models_pytorch/flash.py` (draft head
+with an action-slot forward bitwise equal to the full block, `triton_ops.py` kernels matching PyTorch's rounding,
+confidence head), `src/openpi/policies/flash_policy.py`, `scripts/flash/` (see `scripts/flash/README.md`).
 
 ## Raw results
 
