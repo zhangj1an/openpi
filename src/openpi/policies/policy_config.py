@@ -79,6 +79,11 @@ def create_trained_policy(
         except ImportError:
             pytorch_device = "cpu"
 
+    if is_pytorch and train_config.model.pytorch_quantization is not None:
+        # torchao quantizes on the target device; done before the first (compiled) call.
+        model.to(pytorch_device)
+        model.quantize_language_model(train_config.model.pytorch_quantization)
+
     model_input_transforms = list(data_config.model_transforms.inputs)
     if token_len_buckets:
         model_input_transforms = [

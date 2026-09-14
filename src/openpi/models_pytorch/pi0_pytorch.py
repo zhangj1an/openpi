@@ -124,6 +124,36 @@ class PI0Pytorch(nn.Module):
         except ImportError:
             raise ValueError(msg) from None
 
+    def quantize_language_model(self, mode: str) -> int:
+        """Quantize the PaliGemma LM's bfloat16 linears for inference ("fp8" or "nvfp4") and return how many.
+
+        Only the prefix LM: at batch size 1 the action expert's GEMMs see ~10 tokens, where quantizing the activation
+        costs more than the smaller GEMM saves. SigLIP stays in its load precision.
+        """
+        from torchao.quantization import quantize_
+
+        if mode == "fp8":
+            from torchao.quantization import Float8DynamicActivationFloat8WeightConfig
+            from torchao.quantization import PerRow
+
+            config = Float8DynamicActivationFloat8WeightConfig(granularity=PerRow())
+        elif mode == "nvfp4":
+            from torchao.prototype.mx_formats import NVFP4InferenceConfig
+
+            config = NVFP4InferenceConfig()
+        else:
+            raise ValueError(f"Unsupported pytorch_quantization: {mode}")
+
+        language_model = self.paligemma_with_expert.paligemma.language_model
+        targets = [m for m in language_model.modules() if isinstance(m, nn.Linear) and m.weight.dtype == torch.bfloat16]
+        quantize_(
+            language_model,
+            config,
+            filter_fn=lambda m, _: isinstance(m, nn.Linear) and m.weight.dtype == torch.bfloat16,
+        )
+        logging.info("Quantized %d PaliGemma LM linears to %s", len(targets), mode)
+        return len(targets)
+
     def gradient_checkpointing_enable(self):
         """Enable gradient checkpointing for memory optimization."""
         self.gradient_checkpointing_enabled = True

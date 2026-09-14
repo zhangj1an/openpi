@@ -66,6 +66,10 @@ class Args:
     # All lengths are compiled on the first request. Pass an empty tuple to always pad to max_token_len.
     token_len_buckets: tuple[int, ...] = (48,)
 
+    # PyTorch checkpoints only: quantize the PaliGemma LM linears ("fp8" or "nvfp4"). Changes numerics; validate
+    # task success first. NVFP4 requires a Blackwell GPU.
+    pytorch_quantization: str | None = None
+
     # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
     policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
 
@@ -109,8 +113,14 @@ def create_policy(args: Args) -> _policy.Policy:
     """Create a policy from the given arguments."""
     match args.policy:
         case Checkpoint():
+            train_config = _config.get_config(args.policy.config)
+            if args.pytorch_quantization is not None:
+                train_config = dataclasses.replace(
+                    train_config,
+                    model=dataclasses.replace(train_config.model, pytorch_quantization=args.pytorch_quantization),
+                )
             return _policy_config.create_trained_policy(
-                _config.get_config(args.policy.config),
+                train_config,
                 args.policy.dir,
                 default_prompt=args.default_prompt,
                 token_len_buckets=args.token_len_buckets,

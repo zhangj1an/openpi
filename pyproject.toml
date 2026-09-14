@@ -27,6 +27,7 @@ dependencies = [
     "pillow>=11.0.0",
     "sentencepiece>=0.2.0",
     "torch==2.9.1",  # CUDA 12.8 build (Blackwell sm_120, cuBLAS 12.8 / cuDNN 9.10); Triton 3.5 (3.4 segfaults compiling SigLIP)
+    "torchao==0.14.1",  # optional FP8 / NVFP4 inference for the PyTorch model (Pi0Config.pytorch_quantization)
     "tqdm-loggable>=0.2",
     "typing-extensions>=4.12.2",
     "tyro>=0.9.5",
