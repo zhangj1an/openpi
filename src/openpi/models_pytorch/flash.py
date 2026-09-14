@@ -43,9 +43,16 @@ class FlashConfig:
 
 
 class DraftChunkHead(nn.Module):
-    """One Gemma decoder block over [prefix embeddings, state token, H action queries] -> H actions."""
+    """One Gemma decoder block over [prefix embeddings, state token, H action queries] -> H actions.
 
-    def __init__(self, text_config, *, chunk_len: int, action_dim: int = 7, state_dim: int = 32):
+    With `confidence=True` it also predicts, per action, the probability that the verifier accepts it (the confidence
+    head of DSpark, arXiv:2607.05147: c_k = sigmoid(w^T [h_k; embed(x_{k-1})]), with the previous draft action in
+    place of the previous token's embedding). The survival probability of a prefix is the cumulative product.
+    """
+
+    def __init__(
+        self, text_config, *, chunk_len: int, action_dim: int = 7, state_dim: int = 32, confidence: bool = False
+    ):
         super().__init__()
         self.chunk_len = int(chunk_len)
         self.action_dim = int(action_dim)
@@ -57,20 +64,41 @@ class DraftChunkHead(nn.Module):
         self.block = GemmaDecoderLayer(block_config, layer_idx=0)
         self.rotary_emb = GemmaRotaryEmbedding(block_config)
         self.action_head = nn.Linear(hidden, self.action_dim)
+        self.confidence_head = nn.Linear(hidden + self.action_dim, 1) if confidence else None
+        if self.confidence_head is not None:  # start at p = 0.5 without perturbing the action path
+            nn.init.zeros_(self.confidence_head.weight)
+            nn.init.zeros_(self.confidence_head.bias)
 
     def init_from_vlm_layer(self, layer: nn.Module) -> None:
         self.block.load_state_dict(layer.state_dict(), strict=True)
 
     def forward(self, prefix_embs, prefix_pad_masks, prefix_att_masks, state) -> torch.Tensor:
-        """Bitwise the same outputs as `forward_reference`, computing queries, attention, and MLP for the action slots only.
+        hidden = self._action_hidden(prefix_embs, prefix_pad_masks, state)
+        return self.action_head(hidden.to(self.action_head.weight.dtype)).float()
+
+    def forward_with_confidence(
+        self, prefix_embs, prefix_pad_masks, prefix_att_masks, state
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Actions (B, H, action_dim), identical to `forward`, and per-action acceptance logits (B, H)."""
+        if self.confidence_head is None:
+            raise ValueError("DraftChunkHead was built without a confidence head")
+        hidden = self._action_hidden(prefix_embs, prefix_pad_masks, state)
+        actions = self.action_head(hidden.to(self.action_head.weight.dtype)).float()
+        # Previous draft action (zeros before the first), detached like the sampled token DSpark conditions on.
+        prev = torch.cat([torch.zeros_like(actions[:, :1]), actions[:, :-1].detach()], dim=1)
+        head_dtype = self.confidence_head.weight.dtype
+        features = torch.cat([hidden.to(head_dtype), prev.to(head_dtype)], dim=-1)
+        return actions, self.confidence_head(features).squeeze(-1).float()
+
+    def _action_hidden(self, prefix_embs, prefix_pad_masks, state) -> torch.Tensor:
+        """Final hidden states of the action slots; `forward` is bitwise the same as `forward_reference`.
 
         The action slots are the last attention block, so they attend to every unpadded token, and only their outputs
         are decoded: prefix and state tokens contribute keys and values but need no query, o_proj, or MLP (~1/57 of the
         tokens). Every remaining op runs on the same values, in the same dtype, as in the full block (slicing rows does
         not change a row's linear, attention, or elementwise result), and RMSNorm / rotary embeddings run as Triton
-        kernels that reproduce PyTorch's rounding.
+        kernels that reproduce PyTorch's rounding. Prefix attention masks are not needed: the action slots see every block.
         """
-        del prefix_att_masks  # the action slots see every block
         b, device = prefix_embs.shape[0], prefix_embs.device
         block, attn = self.block, self.block.self_attn
         h = self.chunk_len
@@ -106,8 +134,7 @@ class DraftChunkHead(nn.Module):
         normed = triton_ops.gemma_rms_norm(
             hidden, block.post_attention_layernorm.weight, block.post_attention_layernorm.eps
         )
-        hidden = hidden + block.mlp(normed)
-        return self.action_head(hidden.to(self.action_head.weight.dtype)).float()
+        return hidden + block.mlp(normed)
 
     def forward_reference(self, prefix_embs, prefix_pad_masks, prefix_att_masks, state) -> torch.Tensor:
         """The full decoder block over every token (original implementation, kept for tests)."""
@@ -173,13 +200,17 @@ def reconstruct_endpoints(model, state, prefix_pad_masks, past_key_values, draft
     return x_t - t * v_t
 
 
+def step_accepted(draft, reference, config: FlashConfig) -> torch.Tensor:
+    """Whether each draft action is within `threshold` (RMS over the first `dist_dims`) of the reference: (..., H)."""
+    d = config.dist_dims
+    dist = torch.linalg.vector_norm(reference[..., :d] - draft[..., :d], dim=-1) / math.sqrt(d)
+    return dist <= config.threshold
+
+
 def accepted_prefix_len(draft, endpoints, config: FlashConfig) -> torch.Tensor:
     """Longest leading run of draft actions within `threshold` of every reconstruction (Algorithm 1)."""
     h = min(draft.shape[-2], config.max_exec_steps)
-    d = config.dist_dims
-    diff = endpoints[:, :h, :d] - draft[:, :h, :d]  # (K, h, d)
-    dist = torch.linalg.vector_norm(diff, dim=-1) / math.sqrt(d)
-    ok = (dist <= config.threshold).to(torch.int64).cumprod(dim=-1)
+    ok = step_accepted(draft[:, :h], endpoints[:, :h], config).to(torch.int64).cumprod(dim=-1)  # (K, h)
     return ok.sum(dim=-1).min()
 
 

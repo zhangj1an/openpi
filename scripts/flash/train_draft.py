@@ -64,6 +64,12 @@ class Args:
     cache_batch_size: int = 128
     # Write a resumable checkpoint (draft, optimizer, data order) every this many steps; resumed on restart.
     checkpoint_every: int = 2000
+    # DSpark-style confidence head (arXiv:2607.05147), trained jointly: per-action probability that the verifier
+    # accepts the action, supervised with BCE against "within `accept_threshold` of the teacher" (the verifier's
+    # distance, with the teacher standing in for the Action Expert reconstructions).
+    confidence: bool = False
+    conf_weight: float = 1.0
+    accept_threshold: float = 0.15
 
 
 def _input_transforms(train_config, checkpoint_dir: str, buckets):
@@ -198,7 +204,7 @@ def main(args: Args) -> None:
     text_config = model.paligemma_with_expert.paligemma.language_model.config
     horizon = train_config.model.action_horizon
 
-    draft = flash.DraftChunkHead(text_config, chunk_len=horizon, action_dim=7).to(device)
+    draft = flash.DraftChunkHead(text_config, chunk_len=horizon, action_dim=7, confidence=args.confidence).to(device)
     draft.init_from_vlm_layer(model.paligemma_with_expert.paligemma.language_model.layers[0])
     draft.float().train()
     block_params = list(draft.block.parameters())
@@ -239,33 +245,71 @@ def main(args: Args) -> None:
         torch.cuda.empty_cache()
         prefix_batch = cache.batch
 
+    accept_config = flash.FlashConfig(threshold=args.accept_threshold, max_exec_steps=args.exec_steps)
+
+    def predict(prefix_embs, pad, att, state):
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            if args.confidence:
+                return draft.forward_with_confidence(prefix_embs, pad, att, state)
+            return draft(prefix_embs, pad, att, state), None
+
     def loss_fn(pred, tgt):
         per = F.smooth_l1_loss(pred, tgt, reduction="none", beta=args.huber_beta).mean(dim=-1)  # (B, H)
         return (per * weights).sum(dim=-1).mean()
 
+    def conf_loss_fn(pred, conf_logits, tgt):
+        labels = flash.step_accepted(pred.detach(), tgt, accept_config).float()  # (B, H)
+        return F.binary_cross_entropy_with_logits(conf_logits, labels), labels
+
     @torch.no_grad()
     def evaluate(max_batches: int = 20) -> dict:
         draft.eval()
-        dists, grip_ok, loss = [], [], []
+        dists, grip_ok, loss, conf_losses, probs, labels = [], [], [], [], [], []
+        e = args.exec_steps
         for b in range(min(max_batches, math.ceil(len(val_idx) / args.batch_size))):
             idx = val_idx[b * args.batch_size : (b + 1) * args.batch_size]
-            prefix_embs, pad, att, state = prefix_batch(idx)
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                pred = draft(prefix_embs, pad, att, state)
+            pred, conf_logits = predict(*prefix_batch(idx))
             tgt = targets[idx].to(device)
             loss.append(loss_fn(pred, tgt).item())
-            e = args.exec_steps
             dists.append((torch.linalg.vector_norm(pred[:, :e, :6] - tgt[:, :e, :6], dim=-1) / math.sqrt(6)).cpu())
             grip_ok.append(((pred[:, :e, 6] < 0) == (tgt[:, :e, 6] < 0)).float().mean().item())
+            if conf_logits is not None:
+                conf_loss, step_labels = conf_loss_fn(pred, conf_logits, tgt)
+                conf_losses.append(conf_loss.item())
+                probs.append(torch.sigmoid(conf_logits[:, :e]).cpu())
+                labels.append(step_labels[:, :e].cpu())
         draft.train()
         d = torch.cat(dists)
-        return {
+        metrics = {
             "val_loss": float(np.mean(loss)),
             "val_rms_dist_exec": float(d.mean()),
             "val_frac_steps_within_0.15": float((d <= 0.15).float().mean()),
             "val_frac_chunks_all_within_0.15": float((d <= 0.15).all(dim=1).float().mean()),
             "val_gripper_sign_acc": float(np.mean(grip_ok)),
         }
+        if probs:
+            p, y = torch.cat(probs), torch.cat(labels)  # (N, exec_steps)
+            survival = torch.cumprod(p, dim=1)
+            accepted = torch.cumprod(y, dim=1)
+            none_accepted = accepted[:, 0] == 0
+            predicted_none = survival[:, 0] < 0.5
+            metrics |= {
+                "val_conf_bce": float(np.mean(conf_losses)),
+                "val_conf_step_acc": float(((p >= 0.5) == (y == 1)).float().mean()),
+                "val_conf_mean_prob": float(p.mean()),
+                "val_accept_rate": float(y.mean()),
+                # Expected accepted prefix (sum of survival probabilities) against the teacher-proxy prefix.
+                "val_prefix_expected": float(survival.sum(dim=1).mean()),
+                "val_prefix_actual": float(accepted.sum(dim=1).mean()),
+                "val_prefix_mae": float((survival.sum(dim=1) - accepted.sum(dim=1)).abs().mean()),
+                # Rounds with nothing accepted, which a scheduler would send straight to the full path.
+                "val_reject_frac": float(none_accepted.float().mean()),
+                "val_reject_recall": float((predicted_none & none_accepted).sum() / none_accepted.sum().clamp(min=1)),
+                "val_reject_precision": float(
+                    (predicted_none & none_accepted).sum() / predicted_none.sum().clamp(min=1)
+                ),
+            }
+        return metrics
 
     out = pathlib.Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
@@ -273,11 +317,11 @@ def main(args: Args) -> None:
     step, epoch_perm, cursor = 0, rng.permutation(train_idx), 0
     resume_path = out / "last.pt"
     if resume_path.exists():
-        state = torch.load(resume_path, map_location=device, weights_only=False)
-        draft.load_state_dict(state["draft"])
-        optim.load_state_dict(state["optim"])
-        step, cursor, best, epoch_perm = state["step"], state["cursor"], state["best"], state["epoch_perm"]
-        rng.bit_generator.state = state["rng"]
+        ckpt = torch.load(resume_path, map_location=device, weights_only=False)
+        draft.load_state_dict(ckpt["draft"])
+        optim.load_state_dict(ckpt["optim"])
+        step, cursor, best, epoch_perm = ckpt["step"], ckpt["cursor"], ckpt["best"], ckpt["epoch_perm"]
+        rng.bit_generator.state = ckpt["rng"]
         logging.info("Resumed from %s at step %d", resume_path, step)
     start, start_step = time.monotonic(), step
     while step < total_steps:
@@ -289,10 +333,13 @@ def main(args: Args) -> None:
         lr_scale = min(1.0, (step + 1) / args.warmup_steps) * 0.5 * (1 + math.cos(math.pi * step / total_steps))
         for group, base in zip(optim.param_groups, base_lrs, strict=True):
             group["lr"] = base * lr_scale
-        prefix_embs, pad, att, state = prefix_batch(idx)
-        with torch.autocast("cuda", dtype=torch.bfloat16):
-            pred = draft(prefix_embs, pad, att, state)
-        loss = loss_fn(pred, targets[idx].to(device))
+        pred, conf_logits = predict(*prefix_batch(idx))
+        tgt = targets[idx].to(device)
+        action_loss = loss_fn(pred, tgt)
+        loss = action_loss
+        if conf_logits is not None:
+            conf_loss = conf_loss_fn(pred, conf_logits, tgt)[0]
+            loss = action_loss + args.conf_weight * conf_loss
         optim.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(draft.parameters(), 1.0)
@@ -301,11 +348,12 @@ def main(args: Args) -> None:
 
         if step % 50 == 0:
             logging.info(
-                "step %d/%d (epoch %.2f) loss %.4f  %.3f s/step",
+                "step %d/%d (epoch %.2f) action loss %.4f%s  %.3f s/step",
                 step,
                 total_steps,
                 step * args.batch_size / len(train_idx),
-                loss.item(),
+                action_loss.item(),
+                f"  conf bce {conf_loss.item():.4f}" if conf_logits is not None else "",
                 (time.monotonic() - start) / (step - start_step),
             )
         if step % args.eval_every == 0 or step == total_steps:
@@ -317,10 +365,20 @@ def main(args: Args) -> None:
                 best = metrics["val_rms_dist_exec"]
                 safetensors.torch.save_model(draft, str(out / "draft.safetensors"))
                 (out / "draft_meta.json").write_text(
-                    json.dumps({"config": args.config, "chunk_len": horizon, "action_dim": 7, "step": step, **metrics})
+                    json.dumps(
+                        {
+                            "config": args.config,
+                            "chunk_len": horizon,
+                            "action_dim": 7,
+                            "confidence": args.confidence,
+                            "accept_threshold": args.accept_threshold,
+                            "step": step,
+                            **metrics,
+                        }
+                    )
                 )
         if step % args.checkpoint_every == 0 and step < total_steps:
-            state = {
+            ckpt = {
                 "draft": draft.state_dict(),
                 "optim": optim.state_dict(),
                 "step": step,
@@ -329,7 +387,7 @@ def main(args: Args) -> None:
                 "epoch_perm": epoch_perm,
                 "rng": rng.bit_generator.state,
             }
-            torch.save(state, out / "last.pt.tmp")
+            torch.save(ckpt, out / "last.pt.tmp")
             (out / "last.pt.tmp").replace(resume_path)
     resume_path.unlink(missing_ok=True)
 

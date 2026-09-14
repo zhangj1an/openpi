@@ -8,6 +8,7 @@ Clients should send `flash_reset: True` with the first observation of every epis
 """
 
 import dataclasses
+import json
 import logging
 import os
 import pathlib
@@ -51,10 +52,12 @@ def main(args: Args) -> None:
         train_config, args.checkpoint_dir, token_len_buckets=args.token_len_buckets
     )
     model = policy._model  # noqa: SLF001
+    draft_meta = json.loads((pathlib.Path(args.draft_dir) / "draft_meta.json").read_text())
     draft = _flash.DraftChunkHead(
         model.paligemma_with_expert.paligemma.language_model.config,
         chunk_len=train_config.model.action_horizon,
         action_dim=7,
+        confidence=draft_meta.get("confidence", False),
     )
     safetensors.torch.load_model(draft, str(pathlib.Path(args.draft_dir) / "draft.safetensors"))
     flash_config = _flash.FlashConfig(

@@ -60,6 +60,12 @@ uv run scripts/flash/train_draft.py \
   identical to the full block (`DraftChunkHead.forward_reference`) at batch 64 on an H100; the kernels themselves match
   PyTorch's rounding bitwise at every shape (`flash_test.py`). At other shapes cuBLAS may pick a different matmul
   algorithm for the smaller matrices, which changes rounding by at most one bfloat16 step.
+- `--confidence` adds the confidence head of [DSpark](https://arxiv.org/abs/2607.05147), trained jointly
+  (`--conf-weight`, default 1.0 as in DSpark): per action, the probability that the verifier accepts it, from the
+  action slot's hidden state and the previous draft action. Labels are "within `--accept-threshold` (0.15) of the
+  teacher", a stand-in for the Action Expert reconstructions the verifier actually compares against. `val_conf_*`,
+  `val_prefix_expected` / `val_prefix_actual`, and `val_reject_recall` / `val_reject_precision` (rounds with nothing
+  accepted, which a scheduler could send straight to a full round) track it. Serving does not use it yet.
 - H100, batch 64: 0.46 s/step recomputing prefixes with the full block, 0.06 s/step (including evaluation) with
   `--cache-prefixes` and the action-slot forward (draft step alone: 111 ms → 18 ms). A resumable `last.pt` is written
   every `--checkpoint-every` steps; a restarted run continues exactly where it stopped.

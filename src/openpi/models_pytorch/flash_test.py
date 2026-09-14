@@ -132,3 +132,43 @@ def test_draft_serving_precision_runs():
     assert out.dtype == torch.float32
     assert torch.isfinite(out).all()
     assert torch.isfinite(ref).all()
+
+
+@cuda
+def test_confidence_head_leaves_actions_unchanged_and_trains():
+    draft, inputs, target = _draft_and_inputs()
+    with_conf = flash.DraftChunkHead(_config(), chunk_len=10, action_dim=7, confidence=True).cuda().float()
+    missing, unexpected = with_conf.load_state_dict(draft.state_dict(), strict=False)
+    assert missing == ["confidence_head.weight", "confidence_head.bias"]
+    assert not unexpected
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        actions, logits = with_conf.forward_with_confidence(*inputs)
+        ref = draft.forward_reference(*inputs)
+    _assert_equal(actions, ref, "actions")
+    assert logits.shape == (4, 10)
+    _assert_equal(torch.sigmoid(logits), torch.full_like(logits, 0.5), "initial confidence")
+
+    def conf_backward():
+        with_conf.zero_grad(set_to_none=True)
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            actions, logits = with_conf.forward_with_confidence(*inputs)
+        labels = flash.step_accepted(actions.detach(), target, flash.FlashConfig()).float()
+        torch.nn.functional.binary_cross_entropy_with_logits(logits, labels).backward()
+
+    # The zero-initialized head passes no gradient to the trunk until its weights move off zero.
+    conf_backward()
+    assert with_conf.confidence_head.weight.grad.abs().sum() > 0
+    assert with_conf.block.mlp.down_proj.weight.grad is None or with_conf.block.mlp.down_proj.weight.grad.eq(0).all()
+    torch.optim.SGD(with_conf.confidence_head.parameters(), lr=1.0).step()
+    conf_backward()
+    assert with_conf.block.mlp.down_proj.weight.grad.abs().sum() > 0  # joint: the confidence loss reaches the trunk
+    assert with_conf.action_head.weight.grad is None  # the previous-action input is detached
+
+
+def test_step_accepted_matches_accepted_prefix_len():
+    torch.manual_seed(0)
+    config = flash.FlashConfig(threshold=0.15, max_exec_steps=5)
+    draft = torch.randn(1, 10, 32)
+    endpoints = draft + 0.12 * torch.randn(1, 10, 32)
+    ok = flash.step_accepted(draft[:, :5], endpoints[:, :5], config).to(torch.int64).cumprod(dim=-1)
+    assert flash.accepted_prefix_len(draft, endpoints, config) == ok.sum()
