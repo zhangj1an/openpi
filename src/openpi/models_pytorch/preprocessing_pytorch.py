@@ -28,8 +28,13 @@ def preprocess_observation_pytorch(
 
     This function avoids complex type annotations that can cause torch.compile issues.
     """
-    if not set(image_keys).issubset(observation.images):
+    if train and not set(image_keys).issubset(observation.images):
         raise ValueError(f"images dict missing keys: expected {image_keys}, got {list(observation.images)}")
+    # At inference a camera slot that is masked out for the whole request may be left out entirely (see
+    # Policy(drop_masked_image_slots=True)); its tokens would never be attended to, so the output is unchanged.
+    image_keys = [key for key in image_keys if key in observation.images]
+    if not image_keys:
+        raise ValueError(f"images dict has none of the expected keys, got {list(observation.images)}")
 
     batch_shape = observation.state.shape[:-1]
 

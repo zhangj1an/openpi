@@ -21,6 +21,25 @@ from openpi.shared import nnx_utils
 BasePolicy: TypeAlias = _base_policy.BasePolicy
 
 
+def drop_masked_image_slots(inputs: dict) -> dict:
+    """Remove camera slots whose mask is False (e.g. the empty third slot of a two-camera robot).
+
+    A masked slot's image tokens are excluded from attention and do not advance positions, so dropping the slot leaves
+    the model output unchanged while skipping its SigLIP pass and shortening the prefix by its tokens.
+    """
+    masks = inputs.get("image_mask")
+    if not isinstance(masks, dict):
+        return inputs
+    keep = [k for k in inputs["image"] if bool(np.asarray(masks.get(k, True)).any())]
+    if not keep or len(keep) == len(inputs["image"]):
+        return inputs
+    return {
+        **inputs,
+        "image": {k: inputs["image"][k] for k in keep},
+        "image_mask": {k: masks[k] for k in keep if k in masks},
+    }
+
+
 class _TorchChunkGraph:
     """A whole PyTorch inference as one CUDA graph: image conversion, preprocessing, the prefix pass and every
     denoising step. Inputs are copied into static buffers and the graph is replayed, so a call costs one launch
@@ -54,7 +73,7 @@ class _TorchChunkGraph:
 
     def __call__(self, inputs: dict, noise: np.ndarray | None) -> np.ndarray:
         for dst, src in zip(jax.tree.leaves(self._static), jax.tree.leaves(inputs), strict=True):
-            dst.copy_(torch.from_numpy(np.asarray(src)).view(dst.shape))
+            dst.copy_(torch.from_numpy(np.array(src)).view(dst.shape))  # msgpack arrays are read-only
         if noise is None:
             self._noise.normal_()
         else:
@@ -77,6 +96,7 @@ class Policy(BasePolicy):
         is_pytorch: bool = False,
         warmup_token_lens: Sequence[int] | None = None,
         pytorch_cuda_graph: bool = True,
+        drop_masked_image_slots: bool = True,
     ):
         """Initialize the Policy.
 
@@ -94,6 +114,7 @@ class Policy(BasePolicy):
                 compiled, so a later prompt of a different length does not stall a running episode.
             pytorch_cuda_graph: For PyTorch models on CUDA, capture each input shape's whole inference into a CUDA
                 graph and replay it. Use a compile mode without its own CUDA graphs (e.g. "max-autotune-no-cudagraphs").
+            drop_masked_image_slots: For PyTorch models, skip camera slots that are masked out for the request (exact).
         """
         self._model = model
         self._input_transform = _transforms.compose(transforms)
@@ -108,6 +129,7 @@ class Policy(BasePolicy):
             self._model = self._model.to(pytorch_device)
             self._model.eval()
             self._sample_actions = model.sample_actions
+            self._drop_masked_image_slots = drop_masked_image_slots
             self._use_cuda_graph = pytorch_cuda_graph and str(pytorch_device).startswith("cuda")
             compile_mode = getattr(getattr(model, "config", None), "pytorch_compile_mode", None)
             if self._use_cuda_graph and compile_mode in ("max-autotune", "reduce-overhead"):
@@ -188,6 +210,8 @@ class Policy(BasePolicy):
         inputs = self._input_transform(inputs)
 
         start_time = time.monotonic()
+        if self._is_pytorch_model and self._drop_masked_image_slots:
+            inputs = drop_masked_image_slots(inputs)
         if not self._is_pytorch_model:
             if noise is not None:
                 noise = np.asarray(noise, dtype=np.float32)
