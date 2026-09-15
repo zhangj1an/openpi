@@ -1,0 +1,19 @@
+{
+ "label": "torch_graph_compile_b48_nvfp4",
+ "framework": "openpi-pytorch",
+ "torch": "2.9.1+cu128",
+ "compile": "max-autotune-no-cudagraphs",
+ "quant": "nvfp4",
+ "quantized_linears": 126,
+ "policy_load_s": 63.42967566207517,
+ "first_call_ms": 578501.2066799682,
+ "infer_p50_ms": 22.91653648717329,
+ "infer_p90_ms": 23.036020854488015,
+ "model_p50_ms": null,
+ "cuda_graph": true,
+ "token_len_buckets": [
+  48
+ ],
+ "maxabs_vs_jax_ref": 0.010280334022255491,
+ "peak_mem_GB": 8.82411008
+}

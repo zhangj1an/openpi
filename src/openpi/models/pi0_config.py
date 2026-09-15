@@ -32,7 +32,12 @@ class Pi0Config(_model.BaseModelConfig):
     # This config option is not used directly by the model, but it is read by the ModelTransformFactory.
     discrete_state_input: bool = None  # type: ignore
 
-    pytorch_compile_mode: str | None = "max-autotune"
+    # The PyTorch Policy captures each whole inference into its own CUDA graph, so the compiled function must not
+    # manage CUDA graphs itself: "max-autotune-no-cudagraphs" rather than "max-autotune" / "reduce-overhead".
+    pytorch_compile_mode: str | None = "max-autotune-no-cudagraphs"
+    # Optional low-precision inference for the PaliGemma LM linears in the PyTorch model ("fp8" or "nvfp4", via
+    # torchao). This changes numerics, so validate task success before deploying. NVFP4 needs a Blackwell GPU.
+    pytorch_quantization: str | None = None
 
     def __post_init__(self):
         if self.max_token_len is None:
@@ -46,6 +51,7 @@ class Pi0Config(_model.BaseModelConfig):
                 "max-autotune",
                 "max-autotune-no-cudagraphs",
             ]
+        assert self.pytorch_quantization in (None, "fp8", "nvfp4")
 
     @property
     @override

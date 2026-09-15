@@ -1,0 +1,8 @@
+{
+ "label": "exact_baseline",
+ "mode": "exact",
+ "patches": [],
+ "max_token_len": 200,
+ "first_call_ms": 7344.921377953142,
+ "maxabs_vs_baseline": 0.0
+}

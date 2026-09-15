@@ -26,7 +26,8 @@ dependencies = [
     "orbax-checkpoint==0.11.13",
     "pillow>=11.0.0",
     "sentencepiece>=0.2.0",
-    "torch==2.7.1",
+    "torch==2.9.1",  # CUDA 12.8 build (Blackwell sm_120, cuBLAS 12.8 / cuDNN 9.10); Triton 3.5 (3.4 segfaults compiling SigLIP)
+    "torchao==0.14.1",  # optional FP8 / NVFP4 inference for the PyTorch model (Pi0Config.pytorch_quantization)
     "tqdm-loggable>=0.2",
     "typing-extensions>=4.12.2",
     "tyro>=0.9.5",
@@ -76,7 +77,7 @@ members = ["packages/*"]
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-extend-exclude = ["docker", "third_party", "src/openpi/models_pytorch/transformers_replace/*"]
+extend-exclude = ["docker", "third_party", "src/openpi/models_pytorch/transformers_replace/*", "docs/pi05_rtx5090_eval/scripts"]
 
 [tool.ruff.lint]
 # https://docs.astral.sh/ruff/rules/

@@ -1,0 +1,13 @@
+{
+ "label": "exact_cudnn_attn_b48",
+ "mode": "exact",
+ "patches": [
+  "cudnn_attention"
+ ],
+ "max_token_len": 200,
+ "token_len_buckets": [
+  48
+ ],
+ "first_call_ms": 11470.468675950542,
+ "maxabs_vs_baseline": 0.0023684544010161845
+}

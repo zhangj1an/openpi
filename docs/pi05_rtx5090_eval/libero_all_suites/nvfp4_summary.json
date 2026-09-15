@@ -1,0 +1,605 @@
+{
+  "suites": {
+    "libero_spatial": {
+      "successes": 489,
+      "episodes": 500,
+      "success_rate_pct": 97.8,
+      "openpi_reported_pct": 98.8,
+      "per_task": [
+        {
+          "task_id": 0,
+          "task": "pick up the black bowl between the plate and the ramekin and place it on the plate",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 1,
+          "task": "pick up the black bowl next to the ramekin and place it on the plate",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 2,
+          "task": "pick up the black bowl from table center and place it on the plate",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 3,
+          "task": "pick up the black bowl on the cookie box and place it on the plate",
+          "successes": 47,
+          "episodes": 50
+        },
+        {
+          "task_id": 4,
+          "task": "pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate",
+          "successes": 47,
+          "episodes": 50
+        },
+        {
+          "task_id": 5,
+          "task": "pick up the black bowl on the ramekin and place it on the plate",
+          "successes": 48,
+          "episodes": 50
+        },
+        {
+          "task_id": 6,
+          "task": "pick up the black bowl next to the cookie box and place it on the plate",
+          "successes": 49,
+          "episodes": 50
+        },
+        {
+          "task_id": 7,
+          "task": "pick up the black bowl on the stove and place it on the plate",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 8,
+          "task": "pick up the black bowl next to the plate and place it on the plate",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 9,
+          "task": "pick up the black bowl on the wooden cabinet and place it on the plate",
+          "successes": 48,
+          "episodes": 50
+        }
+      ],
+      "mean_steps_success": 113.44580777096114,
+      "chunks": 10888,
+      "server_infer_ms": {
+        "p50": 24.17211202555336,
+        "p90": 30.09434000123293,
+        "p99": 37.90566070179917
+      },
+      "client_roundtrip_ms": {
+        "p50": 27.782566990936175,
+        "p90": 47.10590701433831,
+        "p99": 68.26699851197186
+      },
+      "failed_episodes": [
+        [
+          3,
+          7
+        ],
+        [
+          3,
+          17
+        ],
+        [
+          3,
+          32
+        ],
+        [
+          4,
+          23
+        ],
+        [
+          4,
+          25
+        ],
+        [
+          4,
+          31
+        ],
+        [
+          5,
+          19
+        ],
+        [
+          5,
+          40
+        ],
+        [
+          6,
+          14
+        ],
+        [
+          9,
+          37
+        ],
+        [
+          9,
+          47
+        ]
+      ]
+    },
+    "libero_object": {
+      "successes": 494,
+      "episodes": 500,
+      "success_rate_pct": 98.8,
+      "openpi_reported_pct": 98.2,
+      "per_task": [
+        {
+          "task_id": 0,
+          "task": "pick up the alphabet soup and place it in the basket",
+          "successes": 48,
+          "episodes": 50
+        },
+        {
+          "task_id": 1,
+          "task": "pick up the cream cheese and place it in the basket",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 2,
+          "task": "pick up the salad dressing and place it in the basket",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 3,
+          "task": "pick up the bbq sauce and place it in the basket",
+          "successes": 48,
+          "episodes": 50
+        },
+        {
+          "task_id": 4,
+          "task": "pick up the ketchup and place it in the basket",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 5,
+          "task": "pick up the tomato sauce and place it in the basket",
+          "successes": 49,
+          "episodes": 50
+        },
+        {
+          "task_id": 6,
+          "task": "pick up the butter and place it in the basket",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 7,
+          "task": "pick up the milk and place it in the basket",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 8,
+          "task": "pick up the chocolate pudding and place it in the basket",
+          "successes": 49,
+          "episodes": 50
+        },
+        {
+          "task_id": 9,
+          "task": "pick up the orange juice and place it in the basket",
+          "successes": 50,
+          "episodes": 50
+        }
+      ],
+      "mean_steps_success": 148.65991902834008,
+      "chunks": 14323,
+      "server_infer_ms": {
+        "p50": 24.34223104501143,
+        "p90": 29.544042446650575,
+        "p99": 36.3426274363883
+      },
+      "client_roundtrip_ms": {
+        "p50": 29.67716899001971,
+        "p90": 50.682130188215524,
+        "p99": 72.58517477195711
+      },
+      "failed_episodes": [
+        [
+          0,
+          5
+        ],
+        [
+          0,
+          41
+        ],
+        [
+          3,
+          34
+        ],
+        [
+          3,
+          35
+        ],
+        [
+          5,
+          7
+        ],
+        [
+          8,
+          19
+        ]
+      ]
+    },
+    "libero_goal": {
+      "successes": 489,
+      "episodes": 500,
+      "success_rate_pct": 97.8,
+      "openpi_reported_pct": 98.0,
+      "per_task": [
+        {
+          "task_id": 0,
+          "task": "open the middle drawer of the cabinet",
+          "successes": 49,
+          "episodes": 50
+        },
+        {
+          "task_id": 1,
+          "task": "put the bowl on the stove",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 2,
+          "task": "put the wine bottle on top of the cabinet",
+          "successes": 47,
+          "episodes": 50
+        },
+        {
+          "task_id": 3,
+          "task": "open the top drawer and put the bowl inside",
+          "successes": 48,
+          "episodes": 50
+        },
+        {
+          "task_id": 4,
+          "task": "put the bowl on top of the cabinet",
+          "successes": 49,
+          "episodes": 50
+        },
+        {
+          "task_id": 5,
+          "task": "push the plate to the front of the stove",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 6,
+          "task": "put the cream cheese in the bowl",
+          "successes": 49,
+          "episodes": 50
+        },
+        {
+          "task_id": 7,
+          "task": "turn on the stove",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 8,
+          "task": "put the bowl on the plate",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 9,
+          "task": "put the wine bottle on the rack",
+          "successes": 47,
+          "episodes": 50
+        }
+      ],
+      "mean_steps_success": 118.94683026584867,
+      "chunks": 11602,
+      "server_infer_ms": {
+        "p50": 24.49637302197516,
+        "p90": 29.823155008489266,
+        "p99": 37.28474660310894
+      },
+      "client_roundtrip_ms": {
+        "p50": 29.439825477311388,
+        "p90": 50.24003498838283,
+        "p99": 71.70377081085459
+      },
+      "failed_episodes": [
+        [
+          0,
+          1
+        ],
+        [
+          2,
+          3
+        ],
+        [
+          2,
+          7
+        ],
+        [
+          2,
+          48
+        ],
+        [
+          3,
+          14
+        ],
+        [
+          3,
+          20
+        ],
+        [
+          4,
+          49
+        ],
+        [
+          6,
+          40
+        ],
+        [
+          9,
+          14
+        ],
+        [
+          9,
+          30
+        ],
+        [
+          9,
+          48
+        ]
+      ]
+    },
+    "libero_10": {
+      "successes": 463,
+      "episodes": 500,
+      "success_rate_pct": 92.6,
+      "openpi_reported_pct": 92.4,
+      "per_task": [
+        {
+          "task_id": 0,
+          "task": "put both the alphabet soup and the tomato sauce in the basket",
+          "successes": 47,
+          "episodes": 50
+        },
+        {
+          "task_id": 1,
+          "task": "put both the cream cheese box and the butter in the basket",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 2,
+          "task": "turn on the stove and put the moka pot on it",
+          "successes": 49,
+          "episodes": 50
+        },
+        {
+          "task_id": 3,
+          "task": "put the black bowl in the bottom drawer of the cabinet and close it",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 4,
+          "task": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+          "successes": 49,
+          "episodes": 50
+        },
+        {
+          "task_id": 5,
+          "task": "pick up the book and place it in the back compartment of the caddy",
+          "successes": 50,
+          "episodes": 50
+        },
+        {
+          "task_id": 6,
+          "task": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+          "successes": 47,
+          "episodes": 50
+        },
+        {
+          "task_id": 7,
+          "task": "put both the alphabet soup and the cream cheese box in the basket",
+          "successes": 49,
+          "episodes": 50
+        },
+        {
+          "task_id": 8,
+          "task": "put both moka pots on the stove",
+          "successes": 28,
+          "episodes": 50
+        },
+        {
+          "task_id": 9,
+          "task": "put the yellow and white mug in the microwave and close it",
+          "successes": 44,
+          "episodes": 50
+        }
+      ],
+      "mean_steps_success": 262.99568034557234,
+      "chunks": 27540,
+      "server_infer_ms": {
+        "p50": 24.814862990751863,
+        "p90": 32.83729770337232,
+        "p99": 99.71361536416225
+      },
+      "client_roundtrip_ms": {
+        "p50": 32.60624801623635,
+        "p90": 63.364187983097516,
+        "p99": 193.57807580905506
+      },
+      "failed_episodes": [
+        [
+          0,
+          18
+        ],
+        [
+          0,
+          38
+        ],
+        [
+          0,
+          49
+        ],
+        [
+          2,
+          6
+        ],
+        [
+          4,
+          13
+        ],
+        [
+          6,
+          16
+        ],
+        [
+          6,
+          23
+        ],
+        [
+          6,
+          33
+        ],
+        [
+          7,
+          15
+        ],
+        [
+          8,
+          2
+        ],
+        [
+          8,
+          6
+        ],
+        [
+          8,
+          8
+        ],
+        [
+          8,
+          9
+        ],
+        [
+          8,
+          10
+        ],
+        [
+          8,
+          12
+        ],
+        [
+          8,
+          13
+        ],
+        [
+          8,
+          16
+        ],
+        [
+          8,
+          20
+        ],
+        [
+          8,
+          21
+        ],
+        [
+          8,
+          22
+        ],
+        [
+          8,
+          23
+        ],
+        [
+          8,
+          26
+        ],
+        [
+          8,
+          27
+        ],
+        [
+          8,
+          29
+        ],
+        [
+          8,
+          33
+        ],
+        [
+          8,
+          37
+        ],
+        [
+          8,
+          40
+        ],
+        [
+          8,
+          41
+        ],
+        [
+          8,
+          42
+        ],
+        [
+          8,
+          46
+        ],
+        [
+          8,
+          49
+        ],
+        [
+          9,
+          4
+        ],
+        [
+          9,
+          9
+        ],
+        [
+          9,
+          28
+        ],
+        [
+          9,
+          30
+        ],
+        [
+          9,
+          37
+        ],
+        [
+          9,
+          45
+        ]
+      ]
+    }
+  },
+  "overall": {
+    "successes": 1935,
+    "episodes": 2000,
+    "success_rate_pct": 96.75,
+    "mean_of_suites_pct": 96.75,
+    "openpi_reported_mean_pct": 96.85,
+    "chunks": 64353,
+    "server_infer_ms": {
+      "p50": 24.548714980483055,
+      "p90": 30.791581398807473,
+      "p99": 97.61719344183803
+    }
+  }
+}

@@ -109,20 +109,18 @@ class Pi0(_model.BaseModel):
         input_mask = []
         ar_mask = []
         tokens = []
-        # embed images
-        for name in obs.images:
-            image_tokens, _ = self.PaliGemma.img(obs.images[name], train=False)
-
-            tokens.append(image_tokens)
-            input_mask.append(
-                einops.repeat(
-                    obs.image_masks[name],
-                    "b -> b s",
-                    s=image_tokens.shape[1],
-                )
-            )
-            # image tokens attend to each other
-            ar_mask += [False] * image_tokens.shape[1]
+        # embed images: all camera slots go through SigLIP in a single call. At batch size 1 this replaces three
+        # small launches with one larger GEMM-friendly batch; results are bit-identical to per-slot calls.
+        names = list(obs.images)
+        num_views = len(names)
+        pixels = jnp.concatenate([obs.images[name] for name in names], axis=0)
+        image_tokens, _ = self.PaliGemma.img(pixels, train=False)
+        image_tokens = einops.rearrange(image_tokens, "(v b) s d -> b (v s) d", v=num_views)
+        tokens.append(image_tokens)
+        image_masks = jnp.stack([obs.image_masks[name] for name in names], axis=1)
+        input_mask.append(einops.repeat(image_masks, "b v -> b (v s)", s=image_tokens.shape[1] // num_views))
+        # image tokens attend to each other
+        ar_mask += [False] * image_tokens.shape[1]
 
         # add language (aka tokenized inputs)
         if obs.tokenized_prompt is not None:

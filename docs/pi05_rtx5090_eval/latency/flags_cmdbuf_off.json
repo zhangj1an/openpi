@@ -1,0 +1,11 @@
+{
+ "label": "flags_cmdbuf_off",
+ "mode": "latency",
+ "patches": [],
+ "max_token_len": 200,
+ "first_call_ms": 25877.873394987546,
+ "maxabs_vs_baseline": 0.005346316650390648,
+ "infer_p50_ms": 56.60234048264101,
+ "infer_p90_ms": 57.19179097795859,
+ "model_p50_ms": 55.55611749878153
+}

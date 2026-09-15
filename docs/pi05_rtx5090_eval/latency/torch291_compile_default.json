@@ -1,0 +1,15 @@
+{
+ "label": "torch291_compile_default",
+ "framework": "openpi-pytorch",
+ "torch": "2.9.1+cu128",
+ "compile": "default",
+ "quant": "none",
+ "quantized_linears": 0,
+ "policy_load_s": 61.94273125100881,
+ "first_call_ms": 100079.1483410867,
+ "infer_p50_ms": 117.87665449082851,
+ "infer_p90_ms": 118.75048091169447,
+ "model_p50_ms": 112.90880403248593,
+ "maxabs_vs_jax_ref": 0.004298008171409351,
+ "peak_mem_GB": 7.709572096
+}

@@ -1,0 +1,11 @@
+{
+ "label": "flags_cudnn_fmha",
+ "mode": "latency",
+ "patches": [],
+ "max_token_len": 200,
+ "first_call_ms": 24522.6470050402,
+ "maxabs_vs_baseline": 0.005346316650390648,
+ "infer_p50_ms": 52.02643747907132,
+ "infer_p90_ms": 52.46698303380981,
+ "model_p50_ms": 50.94711104175076
+}

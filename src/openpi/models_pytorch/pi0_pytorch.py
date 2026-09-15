@@ -124,6 +124,36 @@ class PI0Pytorch(nn.Module):
         except ImportError:
             raise ValueError(msg) from None
 
+    def quantize_language_model(self, mode: str) -> int:
+        """Quantize the PaliGemma LM's bfloat16 linears for inference ("fp8" or "nvfp4") and return how many.
+
+        Only the prefix LM: at batch size 1 the action expert's GEMMs see ~10 tokens, where quantizing the activation
+        costs more than the smaller GEMM saves. SigLIP stays in its load precision.
+        """
+        from torchao.quantization import quantize_
+
+        if mode == "fp8":
+            from torchao.quantization import Float8DynamicActivationFloat8WeightConfig
+            from torchao.quantization import PerRow
+
+            config = Float8DynamicActivationFloat8WeightConfig(granularity=PerRow())
+        elif mode == "nvfp4":
+            from torchao.prototype.mx_formats import NVFP4InferenceConfig
+
+            config = NVFP4InferenceConfig()
+        else:
+            raise ValueError(f"Unsupported pytorch_quantization: {mode}")
+
+        language_model = self.paligemma_with_expert.paligemma.language_model
+        targets = [m for m in language_model.modules() if isinstance(m, nn.Linear) and m.weight.dtype == torch.bfloat16]
+        quantize_(
+            language_model,
+            config,
+            filter_fn=lambda m, _: isinstance(m, nn.Linear) and m.weight.dtype == torch.bfloat16,
+        )
+        logging.info("Quantized %d PaliGemma LM linears to %s", len(targets), mode)
+        return len(targets)
+
     def gradient_checkpointing_enable(self):
         """Enable gradient checkpointing for memory optimization."""
         self.gradient_checkpointing_enabled = True
@@ -194,21 +224,24 @@ class PI0Pytorch(nn.Module):
         pad_masks = []
         att_masks = []
 
-        # Process images
-        for img, img_mask in zip(images, img_masks, strict=True):
+        # Process images: all camera slots go through SigLIP in one call (bit-identical to one call per slot, but a
+        # single batched launch at batch size 1).
+        def image_embed_func(pixels):
+            return self.paligemma_with_expert.embed_image(pixels)
 
-            def image_embed_func(img):
-                return self.paligemma_with_expert.embed_image(img)
-
-            img_emb = self._apply_checkpoint(image_embed_func, img)
-
-            bsize, num_img_embs = img_emb.shape[:2]
-
-            embs.append(img_emb)
-            pad_masks.append(img_mask[:, None].expand(bsize, num_img_embs))
-
-            # Create attention masks so that image tokens attend to each other
-            att_masks += [0] * num_img_embs
+        num_views = len(images)
+        bsize = images[0].shape[0]
+        img_embs = self._apply_checkpoint(image_embed_func, torch.cat(images, dim=0))
+        num_img_embs = img_embs.shape[1]
+        img_embs = (
+            img_embs.view(num_views, bsize, num_img_embs, -1).transpose(0, 1).reshape(bsize, -1, img_embs.shape[-1])
+        )
+        embs.append(img_embs)
+        pad_masks.append(
+            torch.stack(list(img_masks), dim=1)[:, :, None].expand(bsize, num_views, num_img_embs).reshape(bsize, -1)
+        )
+        # Create attention masks so that image tokens attend to each other
+        att_masks += [0] * (num_views * num_img_embs)
 
         # Process language tokens
         def lang_embed_func(lang_tokens):
@@ -227,7 +260,8 @@ class PI0Pytorch(nn.Module):
 
         embs = torch.cat(embs, dim=1)
         pad_masks = torch.cat(pad_masks, dim=1)
-        att_masks = torch.tensor(att_masks, dtype=torch.bool, device=pad_masks.device)
+        # The prefix is fully bidirectional (all zeros); build it on device rather than copying a Python list.
+        att_masks = torch.zeros(len(att_masks), dtype=torch.bool, device=pad_masks.device)
 
         # Get batch size from the first dimension of the concatenated tensors
         bsize = pad_masks.shape[0]
@@ -309,7 +343,12 @@ class PI0Pytorch(nn.Module):
 
         embs = torch.cat(embs, dim=1)
         pad_masks = torch.cat(pad_masks, dim=1)
-        att_masks = torch.tensor(att_masks, dtype=embs.dtype, device=embs.device)
+        # Built on device (no host-to-device copy of a Python list on every denoising step).
+        att_mask_values = att_masks
+        att_masks = torch.zeros(len(att_mask_values), dtype=embs.dtype, device=embs.device)
+        for i, value in enumerate(att_mask_values):
+            if value:
+                att_masks[i : i + 1].fill_(1)  # fill_ takes the scalar as a kernel argument, not a host copy
         att_masks = att_masks[None, :].expand(bsize, len(att_masks))
 
         return embs, pad_masks, att_masks, adarms_cond
@@ -400,11 +439,14 @@ class PI0Pytorch(nn.Module):
         )
 
         dt = -1.0 / num_steps
-        dt = torch.tensor(dt, dtype=torch.float32, device=device)
+        # torch.full rather than torch.tensor: no host-to-device copy, so the whole call is CUDA-graph capturable.
+        dt = torch.full((), dt, dtype=torch.float32, device=device)
 
         x_t = noise
-        time = torch.tensor(1.0, dtype=torch.float32, device=device)
-        while time >= -dt / 2:
+        time = torch.full((), 1.0, dtype=torch.float32, device=device)
+        # Fixed trip count instead of `while time >= -dt / 2`: same Euler updates, but no device-to-host sync per step
+        # and no data-dependent branch, so the loop can be compiled and captured into a CUDA graph.
+        for _ in range(num_steps):
             expanded_time = time.expand(bsize)
             v_t = self.denoise_step(
                 state,

@@ -1,0 +1,11 @@
+{
+ "label": "branch_exact_buckets48",
+ "mode": "exact",
+ "patches": [],
+ "max_token_len": 200,
+ "token_len_buckets": [
+  48
+ ],
+ "first_call_ms": 12055.416483082809,
+ "maxabs_vs_baseline": 0.0019527353515623735
+}

@@ -1,7 +1,17 @@
 import dataclasses
 import enum
 import logging
+import os
 import socket
+
+# Record every GPU op type into XLA command buffers (CUDA graphs), not just the default subset. Serving runs one
+# fixed-shape program per request, so launch overhead is pure cost: ~1 ms per call at batch size 1 on an RTX 5090.
+# Must be set before JAX is imported; an explicit XLA_FLAGS from the environment takes precedence.
+os.environ.setdefault(
+    "XLA_FLAGS",
+    "--xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUBLASLT,CUSTOM_CALL,CUDNN,WHILE,CONDITIONAL "
+    "--xla_gpu_graph_min_graph_size=1",
+)
 
 import tyro
 
@@ -51,6 +61,15 @@ class Args:
     # Record the policy's behavior for debugging.
     record: bool = False
 
+    # Pad prompts to the smallest of these lengths that fits (the model's max_token_len is always included) instead
+    # of always to max_token_len. Exact: padding is masked. Shorter prefixes are faster (pi05_libero: ~3 ms per call).
+    # All lengths are compiled on the first request. Pass an empty tuple to always pad to max_token_len.
+    token_len_buckets: tuple[int, ...] = (48,)
+
+    # PyTorch checkpoints only: quantize the PaliGemma LM linears ("fp8" or "nvfp4"). Changes numerics; validate
+    # task success first. NVFP4 requires a Blackwell GPU.
+    pytorch_quantization: str | None = None
+
     # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
     policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
 
@@ -76,11 +95,16 @@ DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
 }
 
 
-def create_default_policy(env: EnvMode, *, default_prompt: str | None = None) -> _policy.Policy:
+def create_default_policy(
+    env: EnvMode, *, default_prompt: str | None = None, token_len_buckets: tuple[int, ...] = ()
+) -> _policy.Policy:
     """Create a default policy for the given environment."""
     if checkpoint := DEFAULT_CHECKPOINT.get(env):
         return _policy_config.create_trained_policy(
-            _config.get_config(checkpoint.config), checkpoint.dir, default_prompt=default_prompt
+            _config.get_config(checkpoint.config),
+            checkpoint.dir,
+            default_prompt=default_prompt,
+            token_len_buckets=token_len_buckets,
         )
     raise ValueError(f"Unsupported environment mode: {env}")
 
@@ -89,11 +113,22 @@ def create_policy(args: Args) -> _policy.Policy:
     """Create a policy from the given arguments."""
     match args.policy:
         case Checkpoint():
+            train_config = _config.get_config(args.policy.config)
+            if args.pytorch_quantization is not None:
+                train_config = dataclasses.replace(
+                    train_config,
+                    model=dataclasses.replace(train_config.model, pytorch_quantization=args.pytorch_quantization),
+                )
             return _policy_config.create_trained_policy(
-                _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
+                train_config,
+                args.policy.dir,
+                default_prompt=args.default_prompt,
+                token_len_buckets=args.token_len_buckets,
             )
         case Default():
-            return create_default_policy(args.env, default_prompt=args.default_prompt)
+            return create_default_policy(
+                args.env, default_prompt=args.default_prompt, token_len_buckets=args.token_len_buckets
+            )
 
 
 def main(args: Args) -> None:

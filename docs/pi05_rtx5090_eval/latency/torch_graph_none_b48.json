@@ -1,0 +1,19 @@
+{
+ "label": "torch_graph_none_b48",
+ "framework": "openpi-pytorch",
+ "torch": "2.9.1+cu128",
+ "compile": "none",
+ "quant": "none",
+ "quantized_linears": 0,
+ "policy_load_s": 60.50521496695001,
+ "first_call_ms": 1507.5772550189868,
+ "infer_p50_ms": 54.535125964321196,
+ "infer_p90_ms": 54.55829702550545,
+ "model_p50_ms": null,
+ "cuda_graph": true,
+ "token_len_buckets": [
+  48
+ ],
+ "maxabs_vs_jax_ref": 0.004764381061464595,
+ "peak_mem_GB": 7.632069632
+}

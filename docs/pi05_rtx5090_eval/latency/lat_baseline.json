@@ -1,0 +1,11 @@
+{
+ "label": "lat_baseline",
+ "mode": "latency",
+ "patches": [],
+ "max_token_len": 200,
+ "first_call_ms": 25920.220933039673,
+ "maxabs_vs_baseline": 0.0,
+ "infer_p50_ms": 63.27080097980797,
+ "infer_p90_ms": 63.909011031500995,
+ "model_p50_ms": 54.74300845526159
+}

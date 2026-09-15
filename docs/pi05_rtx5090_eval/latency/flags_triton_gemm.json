@@ -1,0 +1,11 @@
+{
+ "label": "flags_triton_gemm",
+ "mode": "latency",
+ "patches": [],
+ "max_token_len": 200,
+ "first_call_ms": 25131.939071929082,
+ "maxabs_vs_baseline": 0.005346316650390648,
+ "infer_p50_ms": 52.02666501281783,
+ "infer_p90_ms": 52.44420598028228,
+ "model_p50_ms": 51.009973511099815
+}

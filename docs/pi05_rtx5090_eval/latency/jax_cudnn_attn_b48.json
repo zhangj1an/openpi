@@ -1,0 +1,16 @@
+{
+ "label": "jax_cudnn_attn_b48",
+ "mode": "latency",
+ "patches": [
+  "cudnn_attention"
+ ],
+ "max_token_len": 200,
+ "token_len_buckets": [
+  48
+ ],
+ "first_call_ms": 35960.17022198066,
+ "maxabs_vs_baseline": 0.0024675307617187947,
+ "infer_p50_ms": 54.64972654590383,
+ "infer_p90_ms": 54.90538593148813,
+ "model_p50_ms": 53.59165999107063
+}
