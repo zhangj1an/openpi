@@ -10,6 +10,11 @@ single-robot deployment. Accuracy is checked by closed-loop LIBERO-Spatial rollo
 | Upstream openpi `215abfb` (JAX) | **100 / 100** | 73.1 / 75.4 / 77.4 | 72.2 |
 | **This branch, PyTorch + NVFP4** | **100 / 100** | **25.1 / 25.5 / 26.1** | **24.2** |
 
+**All four LIBERO suites with the latest code** (10 tasks × 50 episodes each, 2,000 episodes): NVFP4 reaches
+**96.75 %** (openpi reports 96.85 % for this checkpoint), at 22.07 ms server / 23.25 ms round trip p50. See
+[`pi05_rtx5090_libero_all_suites.md`](pi05_rtx5090_libero_all_suites.md); how the speedup comes about:
+[`pi05_rtx5090_speedup_explained.md`](pi05_rtx5090_speedup_explained.md).
+
 **2.9× lower end-to-end latency per action chunk, same success rate.** Same checkpoint
 (`gs://openpi-assets/checkpoints/pi05_libero`, converted to PyTorch with `examples/convert_jax_model_to_pytorch.py`),
 same client, same episodes. The NVFP4 rollout ran before the empty-camera-slot change (`813e805`), i.e. with 3 camera

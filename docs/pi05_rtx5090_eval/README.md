@@ -14,6 +14,12 @@ Raw results behind `docs/pi05_rtx5090_latency.md`. Hardware, client protocol and
 Each file has per-episode results (`episodes`), latency summaries, and every chunk's round trip (`raw`).
 The vLLM-Omni rows are for reference (branch `pi05-cudagraph` of vllm-omni, see the main doc).
 
+## `libero_all_suites/` — NVFP4 on all four suites (10 tasks × 50 episodes each)
+
+Latest branch code, PyTorch + NVFP4: 1935/2000 (96.75 %; openpi reports 96.85 % for this checkpoint). Clean
+single-client latency: server p50 / p99 22.07 / 23.42 ms, round trip 23.25 / 25.55 ms (bf16: 28.78 / 30.19 and
+30.15 / 32.30 ms). Write-up and file layout: [`../pi05_rtx5090_libero_all_suites.md`](../pi05_rtx5090_libero_all_suites.md).
+
 ## `latency/` — in-process `Policy.infer` harness
 
 One real LIBERO frame, fixed noise. `lat_*`, `flags_*`, `jax_*`, `branch_lat_*`: JAX latency with XLA autotuning;
@@ -30,6 +36,7 @@ FLASH draft training on LIBERO-Spatial (1× H100, 100 epochs, `--cache-prefixes 
 
 - `sim_client_openpi.py`: LIBERO client (openpi websocket protocol; `--server vllm-omni`, `--flash`). Runs in an environment with LIBERO (e.g. LeRobot's `hf-libero`) and `openpi-client`.
 - `run_openpi_libero_eval.sh`, `run_branch_libero_eval.sh`: server + client wrappers used for the rollouts.
+- `run_libero_all_suites.sh`, `aggregate_libero_suites.py`: all-suite rollouts sharded over parallel clients, and their summary.
 - `exp_openpi.py`, `exp_openpi_torch.py`, `openpi_patches.py`: latency / exactness harness and the prototypes tried before implementing changes in `src/`.
 
 Paths inside the scripts (`/dev/shm/...`, `/workspace/...`) are from the benchmark machine; adjust them to your setup.

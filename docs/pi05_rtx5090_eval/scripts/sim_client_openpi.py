@@ -31,7 +31,10 @@ class OpenpiNoPingClient:
 
     def __init__(self, host, port):
         self._packer = msgpack_numpy.Packer()
-        self._ws = _ws_client.connect(f"ws://{host}:{port}", compression=None, max_size=None, ping_interval=None)
+        try:
+            self._ws = _ws_client.connect(f"ws://{host}:{port}", compression=None, max_size=None, ping_interval=None)
+        except TypeError:  # websockets < 14 (e.g. the Python 3.8 LIBERO env): the sync client sends no pings anyway
+            self._ws = _ws_client.connect(f"ws://{host}:{port}", compression=None, max_size=None)
         self._metadata = msgpack_numpy.unpackb(self._ws.recv())
 
     def get_server_metadata(self):
